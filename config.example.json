@@ -1,0 +1,60 @@
+{
+  "api_keys": {
+    "anthropic": "sk-ant-...",
+    "openai": "sk-proj-..."
+  },
+  "models": {
+    "primary": "claude-sonnet-4-6",
+    "primary_provider": "anthropic",
+    "compactor": "gpt-4.1-mini",
+    "compactor_provider": "openai",
+    "classifier": "gpt-4.1-nano",
+    "classifier_provider": "openai",
+    "continuation": "",
+    "continuation_provider": "",
+    "review": "gpt-4.1-mini",
+    "review_provider": "openai"
+  },
+  "available_models": {
+    "anthropic": [
+      "claude-sonnet-4-6",
+      "claude-sonnet-4-20250514",
+      "claude-opus-4-6",
+      "claude-haiku-4-5-20251001"
+    ],
+    "openai": [
+      "gpt-4.1",
+      "gpt-4.1-mini",
+      "gpt-4.1-nano",
+      "gpt-4o",
+      "gpt-4o-mini"
+    ]
+  },
+  "agent": {
+    "name": "Axium",
+    "soul": ""
+  },
+  "soul_file": "soul.md",
+  "settings": {
+    "token_limit": 80000,
+    "max_tokens": 16384,
+    "max_history_messages": 200,
+    "terminal_timeout_secs": 120,
+    "memory_file": "memory.md",
+    "max_output_chars": 15000,
+    "max_tool_iterations": 30,
+    "max_input_chars": 12000,
+    "max_retries": 2,
+    "max_sessions": 50,
+    "working_directory": "/home/yourname",
+    "smtp_host": "",
+    "smtp_port": 587,
+    "smtp_user": "",
+    "smtp_password": "",
+    "smtp_from": "",
+    "telegram_bot_token": "",
+    "telegram_allowed_users": "",
+    "telegram_enabled": false,
+    "conversation_logging": false
+  }
+}

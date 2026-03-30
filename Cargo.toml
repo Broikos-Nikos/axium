@@ -1,0 +1,30 @@
+[package]
+name = "axiom"
+version = "1.0.0"
+edition = "2021"
+description = "Axium — local-first autonomous Linux assistant"
+authors = ["Nikos Broikos <nikos@broikos.gr>"]
+homepage = "https://broikos.gr"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+axum = { version = "0.7", features = ["ws"] }
+futures = "0.3"
+rusqlite = { version = "0.31", features = ["bundled"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+glob = "0.3"
+regex = "1"
+lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
+tokio-util = "0.7"
+notify = "6"
+urlencoding = "2"
+url = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
