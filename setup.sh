@@ -373,10 +373,19 @@ step "7/9  SELinux / permissions"
 
 # On Fedora/RHEL, systemd can't execute binaries from home directories
 # without the correct SELinux type. Set it to bin_t.
+# Ensure the project directory and all files are owned by the service user
+chown -R "$ACTUAL_USER":"$ACTUAL_USER" "$PROJECT_DIR"
+ok "Ownership: $PROJECT_DIR → $ACTUAL_USER"
+
 if command -v getenforce &>/dev/null && [ "$(getenforce 2>/dev/null)" = "Enforcing" ]; then
     if command -v chcon &>/dev/null; then
         chcon -t bin_t "$BINARY"
         ok "SELinux: set bin_t context on binary"
+        # Allow the service to read/write the project directory (config.json, memory.md, etc.)
+        chcon -R -t user_home_t "$PROJECT_DIR" 2>/dev/null \
+            || chcon -R -t var_t "$PROJECT_DIR" 2>/dev/null \
+            || note "SELinux: could not set context on project dir — config saves may fail"
+        ok "SELinux: set write context on $PROJECT_DIR"
     else
         note "SELinux is enforcing but chcon not found — service may fail with Permission denied."
     fi
