@@ -816,6 +816,70 @@
     z-index: 1;
   }
 
+  /* ── Skills Manager ─────────────── */
+  .skills-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .skills-action-btn {
+    background: var(--accent); color: #fff; border: none; padding: 6px 14px;
+    border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: opacity 0.15s;
+  }
+  .skills-action-btn:hover { opacity: 0.85; }
+  .skills-action-btn.secondary { background: none; border: 1px solid var(--border); color: var(--text-muted); }
+  .skills-action-btn.danger { background: var(--red, #e55); }
+  .skill-folder { border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); margin-bottom: 12px; overflow: hidden; }
+  .skill-folder-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; background: var(--bg-tertiary, #1a1a2e); cursor: pointer; user-select: none;
+  }
+  .skill-folder-header:hover { background: var(--border); }
+  .skill-folder-name { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .skill-folder-name .arrow { transition: transform 0.15s; font-size: 10px; color: var(--text-muted); }
+  .skill-folder.open .arrow { transform: rotate(90deg); }
+  .skill-folder-actions { display: flex; gap: 6px; }
+  .skill-file-list { display: none; padding: 8px 14px; }
+  .skill-folder.open .skill-file-list { display: block; }
+  .skill-file-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 8px; border-radius: 4px; font-size: 13px; font-family: var(--font-mono, monospace);
+  }
+  .skill-file-item:hover { background: var(--bg-tertiary, #1a1a2e); }
+  .skill-file-size { color: var(--text-muted); font-size: 11px; margin-left: 8px; }
+  .skill-file-actions { display: flex; gap: 6px; }
+  .skill-file-actions button {
+    background: none; border: none; color: var(--text-muted); font-size: 11px;
+    cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  }
+  .skill-file-actions button:hover { color: var(--text); background: var(--bg-tertiary, #1a1a2e); }
+  .skill-file-actions button.danger:hover { color: var(--red, #e55); }
+  .skills-textarea {
+    width: 100%; min-height: 300px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius-sm, 8px);
+    padding: 12px; font-family: var(--font-mono, monospace); font-size: 13px; line-height: 1.5; resize: vertical;
+    box-sizing: border-box;
+  }
+  .skills-textarea:focus { outline: none; border-color: var(--accent); }
+  .skills-editor-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px; font-size: 13px; color: var(--text-muted);
+  }
+  .skills-empty { text-align: center; color: var(--text-muted); padding: 40px 20px; font-size: 14px; }
+
+  /* ── Plugin Manager ─────────────── */
+  .plugin-item {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px;
+    background: var(--bg); transition: opacity 0.15s;
+  }
+  .plugin-item.disabled { opacity: 0.5; }
+  .plugin-item .plugin-grip { cursor: grab; color: var(--text-muted); font-size: 16px; user-select: none; }
+  .plugin-item .plugin-info { flex: 1; min-width: 0; }
+  .plugin-item .plugin-name { font-weight: 600; font-size: 13px; }
+  .plugin-item .plugin-hooks { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .plugin-toggle { appearance: none; width: 36px; height: 20px; background: var(--border); border-radius: 10px; position: relative; cursor: pointer; border: none; transition: background 0.2s; }
+  .plugin-toggle:checked { background: var(--accent); }
+  .plugin-toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform 0.2s; }
+  .plugin-toggle:checked::after { transform: translateX(16px); }
+  .plugin-empty { text-align: center; color: var(--text-muted); padding: 40px 20px; font-size: 14px; }
+
   .settings-toast {
     position: fixed;
     bottom: 24px;
@@ -1058,6 +1122,69 @@
     #sessions-btn { display: none; }
     #new-session-btn { display: none; }
   }
+
+  /* ── Agentic Task Panel ── */
+  .task-panel {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 300px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    z-index: 900;
+    font-family: var(--font-sans);
+    transition: transform 0.2s, opacity 0.2s;
+    overflow: hidden;
+  }
+  .task-panel.hidden { display: none; }
+  .task-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+  }
+  .task-panel-header h4 {
+    margin: 0;
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .task-panel-header .badge {
+    background: var(--accent-dim);
+    color: var(--accent);
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+  .task-panel-body {
+    max-height: 250px;
+    overflow-y: auto;
+    padding: 6px 0;
+  }
+  .task-panel.collapsed .task-panel-body { display: none; }
+  .task-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    font-size: 12px;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+  }
+  .task-item:last-child { border-bottom: none; }
+  .task-item .t-icon { font-size: 14px; flex-shrink: 0; }
+  .task-item .t-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task-item .t-attempt { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+  .task-item .t-tool { font-size: 10px; color: var(--cyan); flex-shrink: 0; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task-item.done .t-title { color: var(--green); }
+  .task-item.failed .t-title { color: var(--red); }
 </style>
 </head>
 <body>
@@ -1079,6 +1206,8 @@
       <label><input type="radio" name="mode" value="supercharge"><span>Supercharge</span></label>
       <label><input type="radio" name="mode" value="skills"><span>Skills</span></label>
     </div>
+    <button id="skills-btn" title="Manage Skills" style="background:none;border:1px solid var(--border);color:var(--text-muted);font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;">Skills</button>
+    <button id="plugins-btn" title="Manage Plugins" style="background:none;border:1px solid var(--border);color:var(--text-muted);font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;">Plugins</button>
     <button id="settings-btn" title="Settings">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3"></circle>
@@ -1328,6 +1457,58 @@
   </div>
 </div>
 
+<!-- Plugins Overlay -->
+<div class="settings-overlay" id="plugins-overlay">
+  <div class="settings-panel" style="width:520px;">
+    <div class="settings-header">
+      <h2>Plugin Management</h2>
+      <button class="settings-close" id="plugins-close">&times;</button>
+    </div>
+    <div class="settings-body">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <span style="color:var(--text-muted);font-size:12px;">Drop-in plugin folders in <code>axium-plugins/</code>. Drag to reorder.</span>
+      </div>
+      <div id="plugins-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Skills Overlay -->
+<div class="settings-overlay" id="skills-overlay">
+  <div class="settings-panel" style="width:640px;">
+    <div class="settings-header">
+      <h2>Skill Management</h2>
+      <button class="settings-close" id="skills-close">&times;</button>
+    </div>
+    <div class="settings-body">
+      <div class="skills-toolbar">
+        <span style="color:var(--text-muted);font-size:12px;">Skills are loaded in <b>Skills</b> mode to guide the agent.</span>
+        <button id="skills-new-folder" class="skills-action-btn">+ New Skill</button>
+      </div>
+      <div id="skills-list"></div>
+      <div id="skills-editor" style="display:none">
+        <div class="skills-editor-header">
+          <span id="skills-editor-path"></span>
+          <div style="display:flex;gap:6px;">
+            <button id="skills-editor-save" class="skills-action-btn">Save</button>
+            <button id="skills-editor-cancel" class="skills-action-btn secondary">Cancel</button>
+          </div>
+        </div>
+        <textarea id="skills-editor-content" class="skills-textarea" spellcheck="false"></textarea>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Agentic Task Panel -->
+<div class="task-panel hidden" id="task-panel">
+  <div class="task-panel-header" id="task-panel-header">
+    <h4>Agentic Tasks</h4>
+    <span class="badge" id="task-panel-badge">0</span>
+  </div>
+  <div class="task-panel-body" id="task-panel-body"></div>
+</div>
+
 <script>
 (function() {
   const chatMessages = document.getElementById('chat-messages');
@@ -1342,6 +1523,44 @@
   const tokenCount = document.getElementById('token-count');
   const sessionTitleEl = document.getElementById('session-title');
   const clearTermBtn = document.getElementById('clear-terminal');
+
+  // ── Agentic Task Panel ──
+  const taskPanel = document.getElementById('task-panel');
+  const taskPanelHeader = document.getElementById('task-panel-header');
+  const taskPanelBody = document.getElementById('task-panel-body');
+  const taskPanelBadge = document.getElementById('task-panel-badge');
+  const activeTasks = {}; // { id: { title, status, attempt, maxAttempts, tool } }
+
+  taskPanelHeader.addEventListener('click', () => {
+    taskPanel.classList.toggle('collapsed');
+  });
+
+  function updateTaskPanel() {
+    const ids = Object.keys(activeTasks);
+    if (ids.length === 0) {
+      taskPanel.classList.add('hidden');
+      return;
+    }
+    taskPanel.classList.remove('hidden');
+    taskPanelBadge.textContent = ids.length;
+    taskPanelBody.innerHTML = '';
+    for (const id of ids) {
+      const t = activeTasks[id];
+      let icon = '⏳';
+      let cls = '';
+      if (t.status === 'running') icon = '▶';
+      else if (t.status === 'done') { icon = '✅'; cls = 'done'; }
+      else if (t.status === 'failed') { icon = '❌'; cls = 'failed'; }
+      const el = document.createElement('div');
+      el.className = 'task-item' + (cls ? ' ' + cls : '');
+      el.innerHTML = `<span class="t-icon">${icon}</span>` +
+        `<span class="t-title">#${id} ${t.title}</span>` +
+        (t.tool ? `<span class="t-tool">${t.tool}</span>` : '') +
+        `<span class="t-attempt">${t.attempt || 1}/${t.maxAttempts || 3}</span>`;
+      taskPanelBody.appendChild(el);
+    }
+  }
+
 
   let ws = null;
   let isProcessing = false;
@@ -1567,16 +1786,51 @@
 
       case 'task_queued':
         addChatMessage('system', `⏳ Background task queued: "${data.title}" (#${data.id})`);
+        activeTasks[data.id] = { title: data.title, status: 'pending', attempt: 1, maxAttempts: 3 };
+        updateTaskPanel();
         break;
 
       case 'task_started':
-        addChatMessage('system', `▶ Running background task: "${data.title}" (#${data.id})`);
+        addChatMessage('system', `▶ Running background task: "${data.title}" (#${data.id}) — attempt ${data.attempt || 1}/${data.max_attempts || 3}`);
+        if (activeTasks[data.id]) {
+          activeTasks[data.id].status = 'running';
+          activeTasks[data.id].attempt = data.attempt || 1;
+          activeTasks[data.id].maxAttempts = data.max_attempts || 3;
+          activeTasks[data.id].tool = '';
+        } else {
+          activeTasks[data.id] = { title: data.title, status: 'running', attempt: data.attempt || 1, maxAttempts: data.max_attempts || 3 };
+        }
+        updateTaskPanel();
+        break;
+
+      case 'task_progress':
+        if (activeTasks[data.id]) {
+          activeTasks[data.id].tool = data.tool || '';
+          updateTaskPanel();
+        }
+        break;
+
+      case 'task_retry':
+        addChatMessage('system', `🔄 Task #${data.id} "${data.title}" verification failed — retrying (attempt ${data.attempt}/${data.max_attempts}): ${data.reason}`);
+        if (activeTasks[data.id]) {
+          activeTasks[data.id].status = 'pending';
+          activeTasks[data.id].attempt = data.attempt;
+          activeTasks[data.id].tool = '';
+        }
+        updateTaskPanel();
         break;
 
       case 'task_completed': {
         const icon = data.status === 'done' ? '✅' : '❌';
         const preview = data.result ? data.result.slice(0, 300) : '(no output)';
         addChatMessage('system', `${icon} Task #${data.id} "${data.title}" ${data.status}.\n${preview}`);
+        if (activeTasks[data.id]) {
+          activeTasks[data.id].status = data.status;
+          activeTasks[data.id].tool = '';
+          updateTaskPanel();
+          // Auto-remove from panel after 30s
+          setTimeout(() => { delete activeTasks[data.id]; updateTaskPanel(); }, 30000);
+        }
         break;
       }
 
@@ -1590,6 +1844,12 @@
 
       case 'autonomous_done':
         addChatMessage('system', '🤖 Autonomous run complete.');
+        break;
+
+      case 'recovery':
+        if (data.removed > 0) {
+          addChatMessage('system', `🧹 Conversation optimized — ${data.removed} redundant messages cleaned.`);
+        }
         break;
 
       case 'done':
@@ -2211,7 +2471,9 @@
       const result = await resp.json();
 
       if (result.ok) {
-        closeSettings();
+        settingsSave.textContent = 'Saved!';
+        settingsSave.disabled = false;
+        setTimeout(() => { settingsSave.textContent = 'Save Settings'; }, 1500);
         // Update dynamic name in UI
         if (nameVal) {
           agentName = nameVal;
@@ -2511,6 +2773,270 @@
     chatInput.placeholder = `Ask ${agentName} anything...`;
     thinkingEl.childNodes[1].textContent = ` ${agentName} is thinking...`;
   }).catch(() => {});
+
+  // ── Skills Manager ──────────────────────────────────────────────────────
+  const skillsBtn = document.getElementById('skills-btn');
+  const skillsOverlay = document.getElementById('skills-overlay');
+  const skillsClose = document.getElementById('skills-close');
+  const skillsList = document.getElementById('skills-list');
+  const skillsEditor = document.getElementById('skills-editor');
+  const skillsEditorPath = document.getElementById('skills-editor-path');
+  const skillsEditorContent = document.getElementById('skills-editor-content');
+  const skillsEditorSave = document.getElementById('skills-editor-save');
+  const skillsEditorCancel = document.getElementById('skills-editor-cancel');
+  const skillsNewFolder = document.getElementById('skills-new-folder');
+  let editingSkillFile = null;
+
+  async function openSkills() {
+    skillsOverlay.classList.add('open');
+    skillsEditor.style.display = 'none';
+    editingSkillFile = null;
+    await loadSkillsList();
+  }
+
+  async function loadSkillsList() {
+    skillsList.innerHTML = '<div class="skills-empty">Loading...</div>';
+    try {
+      const resp = await fetch('/api/skills');
+      const data = await resp.json();
+      renderSkillsList(data.skills || []);
+    } catch (e) {
+      skillsList.innerHTML = '<div class="skills-empty">Failed to load skills.</div>';
+    }
+  }
+
+  function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    return (bytes / 1024).toFixed(1) + ' KB';
+  }
+
+  function renderSkillsList(skills) {
+    if (!skills.length) {
+      skillsList.innerHTML = '<div class="skills-empty">No skills yet. Click "+ New Skill" to create one.</div>';
+      return;
+    }
+    skillsList.innerHTML = '';
+    skills.forEach(skill => {
+      const folder = document.createElement('div');
+      folder.className = 'skill-folder';
+
+      const header = document.createElement('div');
+      header.className = 'skill-folder-header';
+      header.innerHTML = `<div class="skill-folder-name"><span class="arrow">&#9654;</span>${escapeHtml(skill.name)}<span style="color:var(--text-muted);font-size:11px;">(${skill.files.length} file${skill.files.length !== 1 ? 's' : ''})</span></div>`;
+
+      const actions = document.createElement('div');
+      actions.className = 'skill-folder-actions';
+
+      const addFileBtn = document.createElement('button');
+      addFileBtn.className = 'skills-action-btn secondary';
+      addFileBtn.textContent = '+ File';
+      addFileBtn.style.cssText = 'font-size:11px;padding:3px 8px;';
+      addFileBtn.addEventListener('click', e => { e.stopPropagation(); promptNewFile(skill.name); });
+      actions.appendChild(addFileBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'skills-action-btn danger';
+      delBtn.textContent = 'Delete';
+      delBtn.style.cssText = 'font-size:11px;padding:3px 8px;';
+      let delConfirm = false;
+      delBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (!delConfirm) {
+          delConfirm = true;
+          delBtn.textContent = 'Confirm?';
+          setTimeout(() => { delConfirm = false; delBtn.textContent = 'Delete'; }, 3000);
+        } else { deleteSkillFolder(skill.name); }
+      });
+      actions.appendChild(delBtn);
+      header.appendChild(actions);
+      header.addEventListener('click', () => folder.classList.toggle('open'));
+
+      const fileList = document.createElement('div');
+      fileList.className = 'skill-file-list';
+      if (!skill.files.length) {
+        fileList.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">Empty folder</div>';
+      } else {
+        skill.files.forEach(f => {
+          const item = document.createElement('div');
+          item.className = 'skill-file-item';
+          item.innerHTML = `<span>${escapeHtml(f.name)}<span class="skill-file-size">${formatSize(f.size)}</span></span><div class="skill-file-actions"><button class="edit-btn">Edit</button><button class="danger del-btn">Delete</button></div>`;
+          item.querySelector('.edit-btn').addEventListener('click', () => openFileEditor(skill.name, f.name));
+          const delFileBtn = item.querySelector('.del-btn');
+          let fdc = false;
+          delFileBtn.addEventListener('click', () => {
+            if (!fdc) { fdc = true; delFileBtn.textContent = 'Confirm?'; setTimeout(() => { fdc = false; delFileBtn.textContent = 'Delete'; }, 3000); }
+            else { deleteSkillFile(skill.name, f.name); }
+          });
+          fileList.appendChild(item);
+        });
+      }
+
+      folder.appendChild(header);
+      folder.appendChild(fileList);
+      skillsList.appendChild(folder);
+    });
+  }
+
+  function promptNewFile(folderName) {
+    const fileName = prompt('New file name (e.g. guidelines.md):');
+    if (!fileName || !fileName.trim()) return;
+    editingSkillFile = { folder: folderName, file: fileName.trim() };
+    skillsEditorPath.textContent = folderName + ' / ' + fileName.trim();
+    skillsEditorContent.value = '';
+    skillsEditor.style.display = 'block';
+    skillsEditorContent.focus();
+  }
+
+  async function openFileEditor(folder, file) {
+    try {
+      const resp = await fetch(`/api/skills/file?folder=${encodeURIComponent(folder)}&file=${encodeURIComponent(file)}`);
+      const data = await resp.json();
+      if (!data.ok) { alert('Failed to load: ' + (data.error || 'Unknown')); return; }
+      editingSkillFile = { folder, file };
+      skillsEditorPath.textContent = folder + ' / ' + file;
+      skillsEditorContent.value = data.content || '';
+      skillsEditor.style.display = 'block';
+      skillsEditorContent.focus();
+    } catch (e) { alert('Failed to load file.'); }
+  }
+
+  skillsEditorSave.addEventListener('click', async () => {
+    if (!editingSkillFile) return;
+    skillsEditorSave.disabled = true;
+    skillsEditorSave.textContent = 'Saving...';
+    try {
+      const resp = await fetch('/api/skills/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: editingSkillFile.folder, file: editingSkillFile.file, content: skillsEditorContent.value }),
+      });
+      const result = await resp.json();
+      if (result.ok) { skillsEditor.style.display = 'none'; editingSkillFile = null; await loadSkillsList(); }
+      else { alert('Save failed: ' + (result.error || 'Unknown')); }
+    } catch (e) { alert('Network error saving file.'); }
+    skillsEditorSave.disabled = false;
+    skillsEditorSave.textContent = 'Save';
+  });
+
+  skillsEditorCancel.addEventListener('click', () => { skillsEditor.style.display = 'none'; editingSkillFile = null; });
+
+  skillsNewFolder.addEventListener('click', async () => {
+    const name = prompt('New skill folder name (e.g. python-development):');
+    if (!name || !name.trim()) return;
+    try {
+      const resp = await fetch('/api/skills/folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      const result = await resp.json();
+      if (result.ok) { await loadSkillsList(); }
+      else { alert('Error: ' + (result.error || 'Unknown')); }
+    } catch (e) { alert('Network error creating folder.'); }
+  });
+
+  async function deleteSkillFolder(name) {
+    try {
+      const resp = await fetch('/api/skills/folder/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+      const result = await resp.json();
+      if (result.ok) {
+        if (editingSkillFile && editingSkillFile.folder === name) { skillsEditor.style.display = 'none'; editingSkillFile = null; }
+        await loadSkillsList();
+      } else { alert('Error: ' + (result.error || 'Unknown')); }
+    } catch (e) { alert('Network error deleting folder.'); }
+  }
+
+  async function deleteSkillFile(folder, file) {
+    try {
+      const resp = await fetch('/api/skills/file/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder, file }) });
+      const result = await resp.json();
+      if (result.ok) {
+        if (editingSkillFile && editingSkillFile.folder === folder && editingSkillFile.file === file) { skillsEditor.style.display = 'none'; editingSkillFile = null; }
+        await loadSkillsList();
+      } else { alert('Error: ' + (result.error || 'Unknown')); }
+    } catch (e) { alert('Network error deleting file.'); }
+  }
+
+  skillsBtn.addEventListener('click', openSkills);
+  skillsClose.addEventListener('click', () => skillsOverlay.classList.remove('open'));
+  skillsOverlay.addEventListener('click', e => { if (e.target === skillsOverlay) skillsOverlay.classList.remove('open'); });
+
+  // ── Plugin Manager ───────────────────────────────────────────────────
+  const pluginsBtn = document.getElementById('plugins-btn');
+  const pluginsOverlay = document.getElementById('plugins-overlay');
+  const pluginsClose = document.getElementById('plugins-close');
+  const pluginsList = document.getElementById('plugins-list');
+
+  async function loadPlugins() {
+    try {
+      const resp = await fetch('/api/plugins');
+      const data = await resp.json();
+      if (!data.ok) return;
+      const plugins = data.plugins || [];
+      if (plugins.length === 0) {
+        pluginsList.innerHTML = '<div class="plugin-empty">No plugins found.<br>Create a folder in <code>axium-plugins/</code> with a <code>plugin.md</code> to get started.</div>';
+        return;
+      }
+      pluginsList.innerHTML = '';
+      plugins.forEach((p, idx) => {
+        const div = document.createElement('div');
+        div.className = 'plugin-item' + (p.enabled ? '' : ' disabled');
+        div.draggable = true;
+        div.dataset.folder = p.folder;
+        const hooks = (p.hooks || []).join(', ') || 'no hooks';
+        div.innerHTML = `
+          <span class="plugin-grip">⠿</span>
+          <div class="plugin-info">
+            <div class="plugin-name">${p.name || p.folder}</div>
+            <div class="plugin-hooks">${hooks}</div>
+          </div>
+          <input type="checkbox" class="plugin-toggle" ${p.enabled ? 'checked' : ''} data-folder="${p.folder}">
+        `;
+        // Toggle handler
+        div.querySelector('.plugin-toggle').addEventListener('change', async (e) => {
+          e.stopPropagation();
+          await fetch('/api/plugins/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: p.folder, enabled: e.target.checked }),
+          });
+          await loadPlugins();
+        });
+        // Drag-and-drop reorder
+        div.addEventListener('dragstart', (e) => {
+          e.dataTransfer.setData('text/plain', p.folder);
+          div.style.opacity = '0.4';
+        });
+        div.addEventListener('dragend', () => { div.style.opacity = ''; });
+        div.addEventListener('dragover', (e) => { e.preventDefault(); div.style.borderColor = 'var(--accent)'; });
+        div.addEventListener('dragleave', () => { div.style.borderColor = ''; });
+        div.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          div.style.borderColor = '';
+          const from = e.dataTransfer.getData('text/plain');
+          const to = p.folder;
+          if (from === to) return;
+          const items = [...pluginsList.querySelectorAll('.plugin-item')].map(el => el.dataset.folder);
+          const fromIdx = items.indexOf(from);
+          const toIdx = items.indexOf(to);
+          if (fromIdx < 0 || toIdx < 0) return;
+          items.splice(fromIdx, 1);
+          items.splice(toIdx, 0, from);
+          await fetch('/api/plugins/reorder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order: items }),
+          });
+          await loadPlugins();
+        });
+        pluginsList.appendChild(div);
+      });
+    } catch (e) { console.error('Failed to load plugins:', e); }
+  }
+
+  pluginsBtn.addEventListener('click', () => { pluginsOverlay.classList.add('open'); loadPlugins(); });
+  pluginsClose.addEventListener('click', () => pluginsOverlay.classList.remove('open'));
+  pluginsOverlay.addEventListener('click', e => { if (e.target === pluginsOverlay) pluginsOverlay.classList.remove('open'); });
 
   // Start
   connect();

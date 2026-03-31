@@ -111,6 +111,8 @@ pub struct TurnConfig {
     /// Model used for post-turn code review and test generation.
     pub review_model: String,
     pub review_provider: String,
+    /// Plugin manager for hook execution (None in sub-agents).
+    pub plugin_manager: Option<std::sync::Arc<tokio::sync::RwLock<crate::plugins::PluginManager>>>,
 }
 
 /// A pending memory operation returned from the agent loop.
@@ -232,6 +234,16 @@ pub async fn classify_and_run(
                 }
             }
         }
+    }
+
+    // Plugin hook: on_classified
+    if let Some(ref pm) = cfg.plugin_manager {
+        let pm = pm.read().await;
+        let _ = pm.run_hook("on_classified", &serde_json::json!({
+            "mode": cfg.mode,
+            "is_complex": is_complex,
+            "user_text": user_msg,
+        })).await;
     }
 
     // Inject skill context into soul if skills mode loaded anything
@@ -728,6 +740,15 @@ pub async fn run_agent_turn(
                 input: input.to_string(),
             });
 
+            // Plugin hook: on_tool_before
+            if let Some(ref pm) = cfg.plugin_manager {
+                let pm = pm.read().await;
+                let _ = pm.run_hook("on_tool_before", &serde_json::json!({
+                    "tool": tool_name,
+                    "input": input,
+                })).await;
+            }
+
             if tool_name == "run_subagent" {
                 subagent_calls.push((tool_id, tool_name, input));
             } else if tool_name == "ask_user" || tool_name == "plan_file_changes" {
@@ -770,6 +791,15 @@ pub async fn run_agent_turn(
                             };
                             tool_log.push(format!("✓ {}(…) → {}", tool_name, truncated));
                             info!(tool = %tool_name, result_len = text.len(), "Tool completed");
+                            // Plugin hook: on_tool_after (parallel success)
+                            if let Some(ref pm) = cfg.plugin_manager {
+                                let pm = pm.read().await;
+                                let _ = pm.run_hook("on_tool_after", &serde_json::json!({
+                                    "tool": tool_name,
+                                    "success": true,
+                                    "result": if text.len() > 1000 { &text[..1000] } else { text.as_str() },
+                                })).await;
+                            }
                             tool_results.push(serde_json::json!({
                                 "type": "tool_result",
                                 "tool_use_id": tool_id,
@@ -781,6 +811,15 @@ pub async fn run_agent_turn(
                             let err_text = format!("Error: {}", e);
                             tool_log.push(format!("✗ {}(…) → {}", tool_name, err_text));
                             info!(tool = %tool_name, error = %e, "Tool failed");
+                            // Plugin hook: on_tool_after (parallel error)
+                            if let Some(ref pm) = cfg.plugin_manager {
+                                let pm = pm.read().await;
+                                let _ = pm.run_hook("on_tool_after", &serde_json::json!({
+                                    "tool": tool_name,
+                                    "success": false,
+                                    "result": err_text,
+                                })).await;
+                            }
                             tool_results.push(serde_json::json!({
                                 "type": "tool_result",
                                 "tool_use_id": tool_id,
@@ -847,6 +886,15 @@ pub async fn run_agent_turn(
             } else { result.clone() };
             tool_log.push(format!("✓ {}(…) → {}", tool_name, truncated));
             info!(tool = %tool_name, result_len = result.len(), "Inline tool completed");
+            // Plugin hook: on_tool_after (inline)
+            if let Some(ref pm) = cfg.plugin_manager {
+                let pm = pm.read().await;
+                let _ = pm.run_hook("on_tool_after", &serde_json::json!({
+                    "tool": tool_name,
+                    "success": true,
+                    "result": if result.len() > 1000 { &result[..1000] } else { result.as_str() },
+                })).await;
+            }
             tool_results.push(serde_json::json!({
                 "type": "tool_result",
                 "tool_use_id": tool_id,

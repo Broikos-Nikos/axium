@@ -89,6 +89,9 @@ pub struct Settings {
     pub telegram_enabled: bool,
     #[serde(default = "default_conversation_logging")]
     pub conversation_logging: bool,
+    /// How many user turns between conversation recovery passes (0 = disabled).
+    #[serde(default = "default_recovery_interval")]
+    pub recovery_interval: usize,
 }
 
 fn default_max_tokens() -> usize { 4096 }
@@ -100,6 +103,7 @@ fn default_max_sessions() -> usize { 50 }
 fn default_working_directory() -> String { "~".to_string() }
 fn default_smtp_port() -> u16 { 587 }
 fn default_conversation_logging() -> bool { true }
+fn default_recovery_interval() -> usize { 6 }
 
 pub fn load_config(path: &str) -> Result<Config> {
     let content = fs::read_to_string(path)?;
@@ -140,9 +144,8 @@ pub fn save_config(path: &str, config: &Config) -> Result<()> {
 /// exists, otherwise falls back to the `agent.soul` value from config.json.
 /// This allows hot-editing the soul without restarting or touching config.
 pub fn load_soul(fallback: &str) -> String {
-    // Try common locations: beside the binary, then CWD
+    // Try reading soul.md from the working directory
     let candidates = [
-        std::path::PathBuf::from("/home/bro/assistant/soul.md"),
         std::path::PathBuf::from("soul.md"),
     ];
     for path in &candidates {

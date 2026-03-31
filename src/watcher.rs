@@ -47,6 +47,7 @@ async fn run_watcher(
                 || path_str.contains("/.axium/")
                 || path_str.contains("/node_modules/")
                 || path_str.contains("/__pycache__/")
+                || path_str.contains("/.claude/")  // Claude Code internals (plugins, cache, etc.)
             {
                 continue;
             }

@@ -3,6 +3,7 @@ mod channels;
 mod config;
 mod db;
 mod memory;
+mod plugins;
 mod tools;
 mod tui;
 mod watcher;
@@ -86,6 +87,9 @@ async fn main() -> Result<()> {
 
     let (broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(64);
 
+    // Load plugin manager
+    let plugin_manager = Arc::new(RwLock::new(plugins::PluginManager::load()));
+
     // Telegram bot shutdown channel (replaced on each settings save)
     let (tg_shutdown_tx, tg_shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -100,6 +104,7 @@ async fn main() -> Result<()> {
         sudo_password: RwLock::new(String::new()),
         broadcast_tx: broadcast_tx.clone(),
         telegram_shutdown: tokio::sync::Mutex::new(tg_shutdown_tx),
+        plugin_manager,
     });
 
     // Spawn background file watcher for the configured working directory

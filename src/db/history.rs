@@ -235,6 +235,31 @@ impl ChatDb {
         ).unwrap_or(0) as usize
     }
 
+    /// Replace ALL messages for a session with a new set (atomic transaction).
+    /// Used by conversation recovery to swap cleaned messages in place.
+    pub fn replace_session_messages(&self, session_id: &str, messages: &[(String, String)]) -> Result<()> {
+        let conn = self.conn();
+        conn.execute_batch("BEGIN")?;
+        let del = conn.execute("DELETE FROM messages WHERE session_id = ?1", params![session_id]);
+        if del.is_err() {
+            let _ = conn.execute_batch("ROLLBACK");
+            del?;
+        }
+        let now = Utc::now().to_rfc3339();
+        for (role, content) in messages {
+            let ins = conn.execute(
+                "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?1, ?2, ?3, ?4)",
+                params![session_id, role, content, now],
+            );
+            if ins.is_err() {
+                let _ = conn.execute_batch("ROLLBACK");
+                ins?;
+            }
+        }
+        conn.execute_batch("COMMIT")?;
+        Ok(())
+    }
+
     /// Delete a session and all its messages atomically.
     pub fn delete_session(&self, session_id: &str) -> Result<()> {
         let conn = self.conn();

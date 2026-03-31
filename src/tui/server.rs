@@ -35,6 +35,8 @@ pub struct AppState {
     pub broadcast_tx: tokio::sync::broadcast::Sender<String>,
     /// Shutdown sender for the Telegram bot — send `true` to stop the current bot.
     pub telegram_shutdown: Mutex<tokio::sync::watch::Sender<bool>>,
+    /// Plugin manager for hook execution.
+    pub plugin_manager: Arc<RwLock<crate::plugins::PluginManager>>,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -53,6 +55,16 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/action/shutdown", post(shutdown_action_handler))
         .route("/api/action/reboot", post(reboot_action_handler))
         .route("/api/health", get(health_handler))
+        .route("/api/skills", get(list_skills_handler))
+        .route("/api/skills/folder", post(create_skill_folder_handler))
+        .route("/api/skills/folder/delete", post(delete_skill_folder_handler))
+        .route("/api/skills/file", get(get_skill_file_handler))
+        .route("/api/skills/file", post(save_skill_file_handler))
+        .route("/api/skills/file/delete", post(delete_skill_file_handler))
+        .route("/api/plugins", get(list_plugins_handler))
+        .route("/api/plugins/toggle", post(toggle_plugin_handler))
+        .route("/api/plugins/reorder", post(reorder_plugins_handler))
+
         .layer(axum::middleware::from_fn(lan_guard))
         .with_state(state)
 }
@@ -193,11 +205,15 @@ async fn set_config(
     if let Some(v) = body["conversation_logging"].as_bool() {
         cfg.settings.conversation_logging = v;
     }
-    match loader::save_config(&state.config_path, &cfg) {
+    let save_result = loader::save_config(&state.config_path, &cfg);
+    // Drop the write lock BEFORE calling restart_telegram, which needs a read lock.
+    drop(cfg);
+    match save_result {
         Ok(_) => {
             info!("Config saved");
-            // Restart Telegram bot with the updated config
-            restart_telegram(&state).await;
+            // Restart telegram in the background so we don't block the HTTP response
+            let state_clone = Arc::clone(&state);
+            tokio::spawn(async move { restart_telegram(&state_clone).await });
             Json(serde_json::json!({"ok": true}))
         }
         Err(e) => Json(serde_json::json!({"ok": false, "error": format!("{:#}", e)})),
@@ -446,6 +462,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let mut auto_mode = false;
     let mut auto_turn_count: u8 = 0;
     let mut pending_auto: Option<String> = None;
+    let mut turns_since_recovery: usize = 0;
+    let mut recovery_window_start: usize = 0; // index into history where current recovery window begins
     let keepalive = tokio::time::Duration::from_secs(30);
     let mut ping_interval = tokio::time::interval(keepalive);
     ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -582,6 +600,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         review_model: cfg.models.review.clone(),
                         review_provider: cfg.models.review_provider.clone(),
                         mode: mode.clone(),
+                        plugin_manager: Some(Arc::clone(&state.plugin_manager)),
                     },
                     ctx,
                     cfg.settings.memory_file.clone(),
@@ -589,6 +608,21 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             };
 
             info!(len = user_text.len(), "User message received");
+
+            // Plugin hook: on_message — may rewrite user_text
+            let user_text = {
+                let hook_input = serde_json::json!({
+                    "user_text": user_text,
+                    "mode": mode,
+                    "session_id": session_id,
+                });
+                let pm = state.plugin_manager.read().await;
+                if let Some(mods) = pm.run_hook("on_message", &hook_input).await {
+                    mods["user_text"].as_str().unwrap_or(&user_text).to_string()
+                } else {
+                    user_text
+                }
+            };
 
             // Push to history but DON'T save to DB yet — deferred until agent succeeds
             history.push(Message::user(&user_text));
@@ -645,6 +679,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             // Spawn agent work
             let mem_lock = Arc::clone(&state.memory_lock);
             let classifier_for_title = classifier.clone();
+            let classifier_for_recovery = classifier.clone();
             let agent_handle = tokio::spawn(async move {
                 let mut hist = hist_clone;
                 let result = router::classify_and_run(
@@ -906,6 +941,21 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                         std::mem::take(&mut partial_text)
                                     };
                                     let clean = crate::agent::router::compress_tool_log(&crate::agent::router::strip_think_tags(&final_text));
+
+                                    // Plugin hook: on_response — may modify response text
+                                    let clean = {
+                                        let hook_input = serde_json::json!({
+                                            "response": clean,
+                                            "session_id": session_id,
+                                        });
+                                        let pm = state.plugin_manager.read().await;
+                                        if let Some(mods) = pm.run_hook("on_response", &hook_input).await {
+                                            mods["response"].as_str().unwrap_or(&clean).to_string()
+                                        } else {
+                                            clean
+                                        }
+                                    };
+
                                     if !clean.trim().is_empty() {
                                         if !history_pushed {
                                             history.push(Message::assistant(&clean));
@@ -919,6 +969,82 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 let _ = ws_tx.send(WsMessage::Text(
                                     serde_json::json!({"type": "done"}).to_string().into()
                                 )).await;
+
+                                // Conversation recovery: periodically clean up correction noise
+                                if !had_error {
+                                    turns_since_recovery += 1;
+                                    let recovery_interval = {
+                                        state.config.read().await.settings.recovery_interval
+                                    };
+                                    if recovery_interval > 0
+                                        && turns_since_recovery >= recovery_interval
+                                        && history.len() >= 6
+                                    {
+                                        let window_start = recovery_window_start;
+                                        let window: Vec<(String, String)> = history[window_start..]
+                                            .iter()
+                                            .map(|m| (m.role.clone(), m.content.clone()))
+                                            .collect();
+
+                                        if window.len() >= 4 {
+                                            info!(
+                                                window_size = window.len(),
+                                                window_start = window_start,
+                                                "Conversation recovery: starting cleanup"
+                                            );
+                                            match classifier_for_recovery
+                                                .conversation_recovery(&window)
+                                                .await
+                                            {
+                                                Some(cleaned) => {
+                                                    let removed = window.len() - cleaned.len();
+                                                    // Rebuild history: keep messages before window, append cleaned
+                                                    history.truncate(window_start);
+                                                    for (role, content) in &cleaned {
+                                                        history.push(Message {
+                                                            role: role.clone(),
+                                                            content: content.clone(),
+                                                        });
+                                                    }
+                                                    // Persist to DB: replace entire session messages
+                                                    let full: Vec<(String, String)> = history
+                                                        .iter()
+                                                        .map(|m| (m.role.clone(), m.content.clone()))
+                                                        .collect();
+                                                    if let Err(e) = state
+                                                        .chat_db
+                                                        .replace_session_messages(&session_id, &full)
+                                                    {
+                                                        error!(error = %e, "Recovery: DB replace failed");
+                                                    }
+                                                    info!(
+                                                        removed = removed,
+                                                        "Conversation recovery: cleaned"
+                                                    );
+                                                    let _ = ws_tx
+                                                        .send(WsMessage::Text(
+                                                            serde_json::json!({
+                                                                "type": "recovery",
+                                                                "removed": removed,
+                                                            })
+                                                            .to_string()
+                                                            .into(),
+                                                        ))
+                                                        .await;
+                                                    recovery_window_start = history.len();
+                                                }
+                                                None => {
+                                                    // No cleanup needed — advance window anyway
+                                                    recovery_window_start = history.len();
+                                                }
+                                            }
+                                        } else {
+                                            recovery_window_start = history.len();
+                                        }
+                                        turns_since_recovery = 0;
+                                    }
+                                }
+
                                 // Autonomous mode: queue next turn or end (skip on error)
                                 if auto_mode && !had_error {
                                     if auto_turn_count < 10 {
@@ -1028,7 +1154,18 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             auto_mode = false;
             auto_turn_count = 0;
             pending_auto = None;
+            turns_since_recovery = 0;
+            recovery_window_start = 0;
             session_id = state.chat_db.create_session().unwrap_or_else(|_| "default".into());
+
+            // Plugin hook: on_session_start
+            {
+                let pm = state.plugin_manager.read().await;
+                let _ = pm.run_hook("on_session_start", &serde_json::json!({
+                    "session_id": session_id,
+                })).await;
+            }
+
             let msg = serde_json::json!({
                 "type": "system",
                 "text": format!("New session started: {}", session_id),
@@ -1042,6 +1179,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 auto_mode = false;
                 auto_turn_count = 0;
                 pending_auto = None;
+                turns_since_recovery = 0;
                 if let Ok(msgs) = state.chat_db.load_session_messages(&target_id) {
                     for m in msgs {
                         // Skip system-role messages (watcher diagnostics etc.) — not for LLM
@@ -1055,6 +1193,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     }
                 }
                 session_id = target_id.clone();
+                recovery_window_start = history.len(); // start fresh for switched session
 
                 let stored_title = state.chat_db.get_session_title(&target_id);
                 let sys_msg = serde_json::json!({
@@ -1203,6 +1342,254 @@ async fn reboot_action_handler(
 
 async fn health_handler() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "ok": true }))
+}
+
+// ── Skills Management API ────────────────────────────────────────────
+
+const SKILLS_DIR: &str = "axium-skills";
+
+/// Sanitize a user-provided name into a safe folder/file component.
+fn sanitize_name(input: &str) -> String {
+    let s: String = input
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' })
+        .collect();
+    let s = s.trim_matches('-').to_string();
+    // collapse multiple hyphens
+    let mut out = String::new();
+    let mut prev_hyphen = false;
+    for c in s.chars() {
+        if c == '-' {
+            if !prev_hyphen { out.push(c); }
+            prev_hyphen = true;
+        } else {
+            out.push(c);
+            prev_hyphen = false;
+        }
+    }
+    if out.len() > 64 { out.truncate(64); }
+    out
+}
+
+/// Validate that path components stay within axium-skills/.
+fn validate_skill_components(components: &[&str]) -> bool {
+    for c in components {
+        if c.is_empty() || *c == "." || *c == ".."
+            || c.contains('/') || c.contains('\\') || c.contains('\0')
+        {
+            return false;
+        }
+    }
+    true
+}
+
+async fn list_skills_handler() -> Json<serde_json::Value> {
+    let skills_dir = std::path::Path::new(SKILLS_DIR);
+    if !skills_dir.is_dir() {
+        let _ = std::fs::create_dir_all(skills_dir);
+        return Json(serde_json::json!({ "skills": [] }));
+    }
+    let mut skills = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(skills_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let mut files = Vec::new();
+                if let Ok(file_entries) = std::fs::read_dir(entry.path()) {
+                    for fe in file_entries.flatten() {
+                        if fe.path().is_file() {
+                            let fname = fe.file_name().to_string_lossy().to_string();
+                            let size = fe.metadata().map(|m| m.len()).unwrap_or(0);
+                            files.push(serde_json::json!({ "name": fname, "size": size }));
+                        }
+                    }
+                }
+                files.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+                skills.push(serde_json::json!({ "name": name, "files": files }));
+            }
+        }
+    }
+    skills.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    Json(serde_json::json!({ "skills": skills }))
+}
+
+async fn create_skill_folder_handler(
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let raw = match body["name"].as_str() {
+        Some(n) if !n.trim().is_empty() => n,
+        _ => return Json(serde_json::json!({"ok": false, "error": "Missing folder name"})),
+    };
+    let name = sanitize_name(raw);
+    if name.is_empty() {
+        return Json(serde_json::json!({"ok": false, "error": "Invalid folder name"}));
+    }
+    let path = std::path::Path::new(SKILLS_DIR).join(&name);
+    if path.exists() {
+        return Json(serde_json::json!({"ok": false, "error": "Folder already exists"}));
+    }
+    match std::fs::create_dir_all(&path) {
+        Ok(_) => Json(serde_json::json!({"ok": true, "name": name})),
+        Err(e) => Json(serde_json::json!({"ok": false, "error": format!("{}", e)})),
+    }
+}
+
+async fn delete_skill_folder_handler(
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let name = match body["name"].as_str() {
+        Some(n) if !n.is_empty() => n,
+        _ => return Json(serde_json::json!({"ok": false, "error": "Missing folder name"})),
+    };
+    if !validate_skill_components(&[name]) {
+        return Json(serde_json::json!({"ok": false, "error": "Invalid folder name"}));
+    }
+    let path = std::path::Path::new(SKILLS_DIR).join(name);
+    if !path.is_dir() {
+        return Json(serde_json::json!({"ok": false, "error": "Folder not found"}));
+    }
+    // double-check canonical path stays within skills dir
+    if let (Ok(base), Ok(target)) = (std::fs::canonicalize(SKILLS_DIR), std::fs::canonicalize(&path)) {
+        if !target.starts_with(&base) {
+            return Json(serde_json::json!({"ok": false, "error": "Access denied"}));
+        }
+    }
+    match std::fs::remove_dir_all(&path) {
+        Ok(_) => Json(serde_json::json!({"ok": true})),
+        Err(e) => Json(serde_json::json!({"ok": false, "error": format!("{}", e)})),
+    }
+}
+
+async fn get_skill_file_handler(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let folder = match params.get("folder") {
+        Some(f) if !f.is_empty() => f.as_str(),
+        _ => return Json(serde_json::json!({"ok": false, "error": "Missing folder"})),
+    };
+    let file = match params.get("file") {
+        Some(f) if !f.is_empty() => f.as_str(),
+        _ => return Json(serde_json::json!({"ok": false, "error": "Missing file"})),
+    };
+    if !validate_skill_components(&[folder, file]) {
+        return Json(serde_json::json!({"ok": false, "error": "Invalid path"}));
+    }
+    let path = std::path::Path::new(SKILLS_DIR).join(folder).join(file);
+    if !path.is_file() {
+        return Json(serde_json::json!({"ok": false, "error": "File not found"}));
+    }
+    if let (Ok(base), Ok(target)) = (std::fs::canonicalize(SKILLS_DIR), std::fs::canonicalize(&path)) {
+        if !target.starts_with(&base) {
+            return Json(serde_json::json!({"ok": false, "error": "Access denied"}));
+        }
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(content) => Json(serde_json::json!({"ok": true, "content": content, "folder": folder, "file": file})),
+        Err(e) => Json(serde_json::json!({"ok": false, "error": format!("{}", e)})),
+    }
+}
+
+async fn save_skill_file_handler(
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let folder = match body["folder"].as_str() {
+        Some(f) if !f.is_empty() => f,
+        _ => return Json(serde_json::json!({"ok": false, "error": "Missing folder"})),
+    };
+    let file = match body["file"].as_str() {
+        Some(f) if !f.is_empty() => f,
+        _ => return Json(serde_json::json!({"ok": false, "error": "Missing file name"})),
+    };
+    let content = body["content"].as_str().unwrap_or("");
+    if !validate_skill_components(&[folder, file]) {
+        return Json(serde_json::json!({"ok": false, "error": "Invalid path"}));
+    }
+    let base = match std::fs::canonicalize(SKILLS_DIR) {
+        Ok(b) => b,
+        Err(_) => return Json(serde_json::json!({"ok": false, "error": "Skills directory not found"})),
+    };
+    let folder_path = base.join(folder);
+    if !folder_path.is_dir() || !folder_path.starts_with(&base) {
+        return Json(serde_json::json!({"ok": false, "error": "Invalid folder"}));
+    }
+    let file_path = folder_path.join(file);
+    if !file_path.starts_with(&folder_path) {
+        return Json(serde_json::json!({"ok": false, "error": "Invalid file name"}));
+    }
+    match std::fs::write(&file_path, content) {
+        Ok(_) => Json(serde_json::json!({"ok": true})),
+        Err(e) => Json(serde_json::json!({"ok": false, "error": format!("{}", e)})),
+    }
+}
+
+async fn delete_skill_file_handler(
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let folder = match body["folder"].as_str() {
+        Some(f) if !f.is_empty() => f,
+        _ => return Json(serde_json::json!({"ok": false, "error": "Missing folder"})),
+    };
+    let file = match body["file"].as_str() {
+        Some(f) if !f.is_empty() => f,
+        _ => return Json(serde_json::json!({"ok": false, "error": "Missing file name"})),
+    };
+    if !validate_skill_components(&[folder, file]) {
+        return Json(serde_json::json!({"ok": false, "error": "Invalid path"}));
+    }
+    let path = std::path::Path::new(SKILLS_DIR).join(folder).join(file);
+    if !path.is_file() {
+        return Json(serde_json::json!({"ok": false, "error": "File not found"}));
+    }
+    if let (Ok(base), Ok(target)) = (std::fs::canonicalize(SKILLS_DIR), std::fs::canonicalize(&path)) {
+        if !target.starts_with(&base) {
+            return Json(serde_json::json!({"ok": false, "error": "Access denied"}));
+        }
+    }
+    match std::fs::remove_file(&path) {
+        Ok(_) => Json(serde_json::json!({"ok": true})),
+        Err(e) => Json(serde_json::json!({"ok": false, "error": format!("{}", e)})),
+    }
+}
+
+// ── Plugin management handlers ──────────────────────────────────────────
+
+async fn list_plugins_handler(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let pm = state.plugin_manager.read().await;
+    Json(serde_json::json!({"ok": true, "plugins": pm.list_plugins()}))
+}
+
+async fn toggle_plugin_handler(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let name = match body["name"].as_str() {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => return Json(serde_json::json!({"ok": false, "error": "Missing plugin name"})),
+    };
+    let enabled = body["enabled"].as_bool().unwrap_or(true);
+    let mut pm = state.plugin_manager.write().await;
+    if pm.set_enabled(&name, enabled) {
+        Json(serde_json::json!({"ok": true}))
+    } else {
+        Json(serde_json::json!({"ok": false, "error": "Plugin not found"}))
+    }
+}
+
+async fn reorder_plugins_handler(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let order: Vec<String> = match body["order"].as_array() {
+        Some(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        None => return Json(serde_json::json!({"ok": false, "error": "Missing order array"})),
+    };
+    let mut pm = state.plugin_manager.write().await;
+    pm.set_order(&order);
+    Json(serde_json::json!({"ok": true}))
 }
 
 /// Returns true for loopback and RFC-1918 private addresses.

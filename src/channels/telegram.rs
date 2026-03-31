@@ -342,6 +342,7 @@ impl TelegramBot {
                     review_model: cfg.models.review.clone(),
                     review_provider: cfg.models.review_provider.clone(),
                     mode: "supercharge".to_string(),
+                    plugin_manager: Some(Arc::clone(&self.state.plugin_manager)),
                 },
                 ctx,
                 cfg.settings.memory_file.clone(),

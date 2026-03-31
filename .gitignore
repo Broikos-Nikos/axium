@@ -13,6 +13,7 @@
 config.json
 
 # Personal runtime data
+soul.md
 memory.md
 chat_history.db
 chat_history.db-shm
@@ -22,11 +23,11 @@ conversation.log
 # Agent caches and per-project knowledge
 .axium/
 
-# Deployment scripts (contain server-specific paths/credentials) / Compiled binary (if placed in project root)
-axiom
+# User-specific files
 deploy.sh
 Axium.desktop
-Cargo.lock
+agent-run.sh
+axiom
 
 # Catch-all for log files
 *.log

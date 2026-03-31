@@ -442,6 +442,186 @@ Rules:
             }
         }
     }
+    /// Conversation recovery: clean up a window of messages by merging correction
+    /// sequences and removing noise while preserving the true meaning.
+    /// Returns None if no cleanup needed, or Some(cleaned_messages) as (role, content) pairs.
+    pub async fn conversation_recovery(
+        &self,
+        messages: &[(String, String)],
+    ) -> Option<Vec<(String, String)>> {
+        if messages.len() < 4 {
+            return None;
+        }
+
+        let system = r#"You are a conversation editor. You receive a sequence of user/assistant messages from an AI agent conversation. Clean up noise while preserving meaning.
+
+MERGE these patterns:
+- User asks something vague → agent misunderstands → user corrects → agent redoes
+  → Merge into: user's clarified request + agent's final correct response
+- User says "no, I meant X" or "that's wrong, do Y instead"
+  → Merge the original request + correction into one clear user message, keep only the correct assistant response
+- Agent gives a wrong answer then corrects itself after user feedback
+  → Keep only the correct final version with the clarified request
+
+PRESERVE exactly:
+- All file paths, code changes, command outputs, and tool results from the FINAL correct action
+- All decisions the user confirmed or made
+- All context needed to continue the conversation (what was built, installed, configured)
+- The chronological order of distinct topics
+- Messages that are already clean (no correction pattern) — return them unchanged
+- <tool_trace> blocks in assistant messages — these are compressed tool logs, keep them verbatim
+
+NEVER:
+- Remove messages containing unique information not repeated elsewhere
+- Merge messages about unrelated topics into one
+- Add information that wasn't in the original messages
+- Change the meaning or outcome of any exchange
+- Drop standalone questions/answers that have no correction
+
+Output: Return a JSON array of {"role":"...","content":"..."} objects with the cleaned messages.
+If NO cleanup is needed (all messages are already clean), respond with exactly: NO_CHANGE"#;
+
+        // Build the conversation text
+        let mut conv = String::new();
+        for (i, (role, content)) in messages.iter().enumerate() {
+            let preview = if content.len() > 2000 {
+                let mut b = 2000;
+                while b > 0 && !content.is_char_boundary(b) {
+                    b -= 1;
+                }
+                format!("{}…[truncated]", &content[..b])
+            } else {
+                content.clone()
+            };
+            conv.push_str(&format!("MSG {}: [{}]\n{}\n\n", i + 1, role, preview));
+        }
+
+        let prompt = format!(
+            "Here are {} messages to review:\n\n{}",
+            messages.len(),
+            conv
+        );
+
+        match self.call_llm(system, &prompt, 4096).await {
+            Ok(resp) => {
+                let trimmed = resp.trim();
+                if trimmed == "NO_CHANGE" || trimmed.starts_with("NO_CHANGE") {
+                    info!("Conversation recovery: no changes needed");
+                    return None;
+                }
+
+                // Try to parse JSON array from response
+                // The LLM might wrap it in ```json ... ```, so strip that
+                let json_str = trimmed
+                    .trim_start_matches("```json")
+                    .trim_start_matches("```")
+                    .trim_end_matches("```")
+                    .trim();
+
+                match serde_json::from_str::<Vec<serde_json::Value>>(json_str) {
+                    Ok(arr) => {
+                        let cleaned: Vec<(String, String)> = arr
+                            .iter()
+                            .filter_map(|v| {
+                                let role = v["role"].as_str()?.to_string();
+                                let content = v["content"].as_str()?.to_string();
+                                if role.is_empty() || content.is_empty() {
+                                    return None;
+                                }
+                                Some((role, content))
+                            })
+                            .collect();
+
+                        if cleaned.is_empty() {
+                            warn!("Conversation recovery: parsed empty array, skipping");
+                            return None;
+                        }
+
+                        // Only apply if we actually reduced message count
+                        if cleaned.len() >= messages.len() {
+                            info!(
+                                original = messages.len(),
+                                cleaned = cleaned.len(),
+                                "Conversation recovery: no reduction, skipping"
+                            );
+                            return None;
+                        }
+
+                        info!(
+                            original = messages.len(),
+                            cleaned = cleaned.len(),
+                            "Conversation recovery: cleaned messages"
+                        );
+                        Some(cleaned)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, response = %trimmed, "Conversation recovery: failed to parse JSON");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "Conversation recovery LLM call failed");
+                None
+            }
+        }
+    }
+
+    /// Verify whether a background task was truly completed.
+    /// Returns Ok(true) if verified, Ok(false) with reason appended if failed.
+    /// Fails open (returns true) on LLM errors to avoid blocking the worker.
+    pub async fn verify_task(&self, task_title: &str, task_context: &str, result: &str) -> (bool, String) {
+        let system = r#"You are a task completion verifier for an AI agent. Given a task description and the agent's result, determine if the task was TRULY completed.
+
+Check:
+- Did the agent actually PERFORM the requested actions (not just describe what it would do)?
+- Are the claimed results specific and concrete (file paths, command outputs, tool traces)?
+- Is there evidence of real tool usage (<tool_trace> blocks, command outputs, file writes)?
+- Does the result address ALL parts of the task, not just some?
+- Would the user consider this task done if they read the result?
+
+An agent that only DESCRIBES what to do without actually doing it is NOT complete.
+An agent that completed some parts but skipped others is NOT complete.
+
+Respond in EXACTLY one of these formats:
+VERIFIED
+FAILED: <1-2 sentence reason why the task is not complete>"#;
+
+        let result_preview = if result.len() > 3000 {
+            let mut b = 3000;
+            while b > 0 && !result.is_char_boundary(b) { b -= 1; }
+            format!("{}…[truncated]", &result[..b])
+        } else {
+            result.to_string()
+        };
+
+        let prompt = format!(
+            "TASK: {}\nCONTEXT: {}\n\nAGENT RESULT:\n{}",
+            task_title,
+            if task_context.is_empty() { "(none)" } else { task_context },
+            result_preview
+        );
+
+        match self.call_llm(system, &prompt, 128).await {
+            Ok(resp) => {
+                let trimmed = resp.trim();
+                info!(verify_result = %trimmed, task = %task_title, "Task verification result");
+                if trimmed.starts_with("VERIFIED") {
+                    (true, String::new())
+                } else if trimmed.starts_with("FAILED:") {
+                    let reason = trimmed.strip_prefix("FAILED:").unwrap_or("").trim().to_string();
+                    (false, reason)
+                } else {
+                    warn!(response = %trimmed, "Task verification returned unexpected value — treating as verified");
+                    (true, String::new())
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "Task verification LLM call failed — treating as verified");
+                (true, String::new())
+            }
+        }
+    }
 }
 
 /// One-shot code reviewer and test generator using a dedicated code model.
