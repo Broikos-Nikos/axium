@@ -55,7 +55,27 @@ info "Project: $PROJECT_DIR"
 info "Distro:  $DISTRO  |  Arch: $ARCH  |  RAM: ${TOTAL_RAM_MB} MB"
 
 # ═══════════════════════════════════════════════════════════════
-step "1/9  Pre-flight checks"
+step "1/11  Source update"
+# ═══════════════════════════════════════════════════════════════
+
+if [ -d "$PROJECT_DIR/.git" ] && command -v git &>/dev/null; then
+    info "Git repository detected — checking for updates..."
+    GIT_OUT=$(su - "$ACTUAL_USER" -c "cd '$PROJECT_DIR' && git pull --ff-only 2>&1") || true
+    if echo "$GIT_OUT" | grep -q "Already up to date"; then
+        ok "Source is up to date"
+    elif echo "$GIT_OUT" | grep -qE "Updating|Fast-forward"; then
+        ok "Source updated from remote — forcing rebuild"
+        FORCE_REBUILD="--rebuild"
+    else
+        warn "git pull: $GIT_OUT"
+        note "Could not update source — proceeding with existing code."
+    fi
+else
+    ok "Not a git repository — skipping source update"
+fi
+
+# ═══════════════════════════════════════════════════════════════
+step "2/11  Pre-flight checks"
 # ═══════════════════════════════════════════════════════════════
 
 # config.json — copy from example if missing, or generate a default
@@ -168,7 +188,7 @@ if ss -tlnp 2>/dev/null | grep -q ':3000 '; then
 fi
 
 # ═══════════════════════════════════════════════════════════════
-step "2/9  System dependencies"
+step "3/11  System dependencies"
 # ═══════════════════════════════════════════════════════════════
 
 case "$DISTRO" in
@@ -197,7 +217,7 @@ done
 [ ${#MISSING_DEPS[@]} -eq 0 ] || error "Missing after install: ${MISSING_DEPS[*]}. Install manually and re-run."
 
 # ═══════════════════════════════════════════════════════════════
-step "3/9  Swap"
+step "4/11  Swap"
 # ═══════════════════════════════════════════════════════════════
 
 if [ "$TOTAL_RAM_MB" -ge 2048 ]; then
@@ -236,7 +256,7 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════
-step "4/9  Rust toolchain"
+step "5/11  Rust toolchain"
 # ═══════════════════════════════════════════════════════════════
 
 if [ -x "$CARGO_BIN" ]; then
@@ -255,7 +275,7 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════
-step "5/9  Config patch"
+step "6/11  Config patch"
 # ═══════════════════════════════════════════════════════════════
 
 # Fix any hardcoded /home/bro paths from the dev machine
@@ -276,7 +296,7 @@ fi
 ok "working_directory: ${WD:-$ACTUAL_HOME}"
 
 # ═══════════════════════════════════════════════════════════════
-step "6/9  Build"
+step "7/11  Build"
 # ═══════════════════════════════════════════════════════════════
 
 if [ -f "$BINARY" ] && [ "$FORCE_REBUILD" != "--rebuild" ]; then
@@ -368,7 +388,7 @@ if command -v file &>/dev/null; then
 fi
 
 # ═══════════════════════════════════════════════════════════════
-step "7/9  SELinux / permissions"
+step "8/11  SELinux / permissions"
 # ═══════════════════════════════════════════════════════════════
 
 # On Fedora/RHEL, systemd can't execute binaries from home directories
@@ -394,7 +414,7 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════
-step "8/9  Firewall"
+step "9/11  Firewall"
 # ═══════════════════════════════════════════════════════════════
 
 FW_FOUND=false
@@ -423,7 +443,7 @@ fi
 [ "$FW_FOUND" = false ] && ok "No firewall detected — port 3000 open by default"
 
 # ═══════════════════════════════════════════════════════════════
-step "9/10 Systemd service"
+step "10/11 Systemd service"
 # ═══════════════════════════════════════════════════════════════
 
 # Stop gracefully and free the port before restarting
@@ -490,7 +510,7 @@ if [ "$STARTED" = false ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════
-step "10/10 Health check"
+step "11/11 Health check"
 # ═══════════════════════════════════════════════════════════════
 
 sleep 2  # let the server bind
