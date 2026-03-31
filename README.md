@@ -2,6 +2,14 @@
 
 A local-first autonomous AI assistant built in Rust. Runs entirely on your machine at `http://127.0.0.1:3000`. No cloud state, no external databases, no phone-home. Just a fast WebSocket-based chat UI connected to a tool-wielding agent with full system access.
 
+## Install
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Broikos-Nikos/axium/main/install.sh)
+```
+
+That's it. The script checks for `git`, installs it if missing, clones the repo, and runs `setup.sh`.
+
 ---
 
 ## What it does
