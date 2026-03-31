@@ -58,11 +58,75 @@ info "Distro:  $DISTRO  |  Arch: $ARCH  |  RAM: ${TOTAL_RAM_MB} MB"
 step "1/9  Pre-flight checks"
 # ═══════════════════════════════════════════════════════════════
 
-# config.json present?
-[ -f "$CONFIG" ] || error "config.json not found at $CONFIG
-  Copy the entire assistant/ folder to this machine first."
+# config.json — copy from example if missing, or generate a default
+if [ ! -f "$CONFIG" ]; then
+    if [ -f "$PROJECT_DIR/config.example.json" ]; then
+        cp "$PROJECT_DIR/config.example.json" "$CONFIG"
+        ok "Created config.json from config.example.json — edit it to add your API keys"
+    else
+        warn "config.example.json not found — generating a default config.json"
+        cat > "$CONFIG" <<'DEFAULTCONFIG'
+{
+  "api_keys": { "anthropic": "sk-ant-...", "openai": "sk-proj-..." },
+  "models": {
+    "primary": "claude-sonnet-4-6", "primary_provider": "anthropic",
+    "compactor": "gpt-4.1-mini", "compactor_provider": "openai",
+    "classifier": "gpt-4.1-nano", "classifier_provider": "openai",
+    "continuation": "", "continuation_provider": "",
+    "review": "gpt-4.1-mini", "review_provider": "openai"
+  },
+  "available_models": {
+    "anthropic": ["claude-sonnet-4-6","claude-opus-4-6","claude-haiku-4-5-20251001"],
+    "openai": ["gpt-4.1","gpt-4.1-mini","gpt-4.1-nano","gpt-4o","gpt-4o-mini"]
+  },
+  "agent": { "name": "Axium", "soul": "" },
+  "soul_file": "soul.md",
+  "settings": {
+    "token_limit": 80000, "max_tokens": 16384, "max_history_messages": 200,
+    "terminal_timeout_secs": 120, "memory_file": "memory.md",
+    "max_output_chars": 15000, "max_tool_iterations": 30,
+    "max_input_chars": 12000, "max_retries": 2, "max_sessions": 50,
+    "working_directory": "/home/yourname",
+    "smtp_host": "", "smtp_port": 587, "smtp_user": "", "smtp_password": "",
+    "smtp_from": "", "telegram_bot_token": "", "telegram_allowed_users": "",
+    "telegram_enabled": false, "conversation_logging": false
+  }
+}
+DEFAULTCONFIG
+        ok "Created default config.json — edit it to add your API keys"
+    fi
+else
+    ok "config.json found"
+fi
 
-ok "config.json found"
+# soul.md — copy from example if missing
+if [ ! -f "$PROJECT_DIR/soul.md" ]; then
+    if [ -f "$PROJECT_DIR/soul.example.md" ]; then
+        cp "$PROJECT_DIR/soul.example.md" "$PROJECT_DIR/soul.md"
+        ok "Created soul.md from soul.example.md"
+    else
+        echo "You are Axium, a precise and proactive Linux assistant." > "$PROJECT_DIR/soul.md"
+        ok "Created default soul.md"
+    fi
+else
+    ok "soul.md found"
+fi
+
+# memory.md — create empty if missing
+if [ ! -f "$PROJECT_DIR/memory.md" ]; then
+    echo "# Axium Memory" > "$PROJECT_DIR/memory.md"
+    ok "Created empty memory.md"
+else
+    ok "memory.md found"
+fi
+
+# axium-skills/ — create directory if missing
+if [ ! -d "$PROJECT_DIR/axium-skills" ]; then
+    mkdir -p "$PROJECT_DIR/axium-skills"
+    ok "Created axium-skills/ directory"
+else
+    ok "axium-skills/ found"
+fi
 
 # Valid JSON? Use jq if available; otherwise a basic brace-balance check.
 if command -v jq &>/dev/null; then
