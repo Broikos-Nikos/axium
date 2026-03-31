@@ -146,7 +146,7 @@ fi
 
 # API keys present?
 HAS_KEYS=false
-grep -qE '"sk-ant-|sk-proj-' "$CONFIG" 2>/dev/null && HAS_KEYS=true
+grep -qE '"sk-ant-[^"\.]{10,}|sk-proj-[^"\.]{10,}' "$CONFIG" 2>/dev/null && HAS_KEYS=true
 if [ "$HAS_KEYS" = true ]; then
     ok "API key(s) found in config.json"
 else
