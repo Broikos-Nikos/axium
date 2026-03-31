@@ -1304,7 +1304,17 @@
       <div class="settings-group">
         <label class="settings-label">Compactor Model</label>
         <select class="settings-select" id="compactor-model"></select>
-        <div class="settings-hint">Cheaper model used to summarize long conversation history.</div>
+        <div class="settings-hint">Cheaper model used to compact long conversation history into a summary.</div>
+      </div>
+      <div class="settings-group">
+        <label class="settings-label">Classifier Model</label>
+        <select class="settings-select" id="classifier-model"></select>
+        <div class="settings-hint">Fast model that decides whether the primary model or a quick reply is needed.</div>
+      </div>
+      <div class="settings-group">
+        <label class="settings-label">Continuation Model</label>
+        <select class="settings-select" id="continuation-model"></select>
+        <div class="settings-hint">Decides whether to keep using tools or stop and respond to the user.</div>
       </div>
 
       <hr class="settings-divider">
@@ -2236,6 +2246,8 @@
   const settingsClose = document.getElementById('settings-close');
   const primarySelect = document.getElementById('primary-model');
   const compactorSelect = document.getElementById('compactor-model');
+  const classifierSelect = document.getElementById('classifier-model');
+  const continuationSelect = document.getElementById('continuation-model');
   const anthropicKeyInput = document.getElementById('anthropic-key-input');
   const openaiKeyInput = document.getElementById('openai-key-input');
   const anthropicKeyStatus = document.getElementById('anthropic-key-status');
@@ -2267,10 +2279,12 @@
 
   function isAnthropic(m) { return m && m.startsWith('claude-'); }
   function needsAnthropic() {
-    return isAnthropic(primarySelect.value) || isAnthropic(compactorSelect.value);
+    return isAnthropic(primarySelect.value) || isAnthropic(compactorSelect.value)
+        || isAnthropic(classifierSelect.value) || isAnthropic(continuationSelect.value);
   }
   function needsOpenai() {
-    return !isAnthropic(primarySelect.value) || !isAnthropic(compactorSelect.value);
+    return !isAnthropic(primarySelect.value) || !isAnthropic(compactorSelect.value)
+        || !isAnthropic(classifierSelect.value) || !isAnthropic(continuationSelect.value);
   }
 
   function updateKeyVisibility() {
@@ -2334,6 +2348,8 @@
 
       populateSelect(primarySelect, currentConfig.available_models, currentConfig.models.primary);
       populateSelect(compactorSelect, currentConfig.available_models, currentConfig.models.compactor);
+      populateSelect(classifierSelect, currentConfig.available_models, currentConfig.models.classifier);
+      populateSelect(continuationSelect, currentConfig.available_models, currentConfig.models.continuation);
 
       agentName = currentConfig.agent_name || 'Agent';
       agentNameInput.value = agentName;
@@ -2437,6 +2453,8 @@
     const body = {
       primary: primarySelect.value,
       compactor: compactorSelect.value,
+      classifier: classifierSelect.value,
+      continuation: continuationSelect.value,
     };
     const nameVal = agentNameInput.value.trim();
     if (nameVal) body.agent_name = nameVal;
@@ -2508,6 +2526,8 @@
   });
   primarySelect.addEventListener('change', updateKeyVisibility);
   compactorSelect.addEventListener('change', updateKeyVisibility);
+  classifierSelect.addEventListener('change', updateKeyVisibility);
+  continuationSelect.addEventListener('change', updateKeyVisibility);
   settingsSave.addEventListener('click', saveSettings);
 
   // ── Sessions panel ──

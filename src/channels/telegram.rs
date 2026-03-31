@@ -416,7 +416,7 @@ impl TelegramBot {
                 }
             };
             match result {
-                Ok((text, memory_ops)) => {
+                Ok((text, memory_ops, compacted)) => {
                     if !memory_ops.is_empty() {
                         let _lock = mem_lock.lock().await;
                         let mut mem = memory;
@@ -429,7 +429,8 @@ impl TelegramBot {
                             }
                         }
                     }
-                    Some(text)
+                    let compacted_hist = if compacted { Some(hist) } else { None };
+                    Some((text, compacted_hist))
                 }
                 Err(e) => {
                     error!(error = %e, "Agent turn failed");
@@ -509,9 +510,17 @@ impl TelegramBot {
         typing_cancel.cancel();
 
         // Wait for agent to finish
-        if let Ok(Some(final_text)) = agent_handle.await {
+        if let Ok(Some((final_text, compacted_hist))) = agent_handle.await {
             if !final_text.is_empty() {
                 response_text = final_text;
+            }
+            if let Some(compacted) = compacted_hist {
+                let tuples: Vec<(String, String)> = compacted.iter()
+                    .map(|m| (m.role.clone(), m.content.clone()))
+                    .collect();
+                if let Err(e) = self.state.chat_db.replace_session_messages(&session_id, &tuples) {
+                    warn!(error = %e, "Telegram: compaction persist to DB failed");
+                }
             }
         }
 

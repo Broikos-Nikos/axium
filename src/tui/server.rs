@@ -175,6 +175,9 @@ async fn set_config(
             cfg.models.classifier = classifier.to_string();
         }
     }
+    if let Some(continuation) = body["continuation"].as_str() {
+        cfg.models.continuation = continuation.to_string();
+    }
     if let Some(key) = body["anthropic_key"].as_str() {
         if !key.is_empty() {
             cfg.api_keys.anthropic = key.to_string();
@@ -722,7 +725,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 )
                 .await;
                 match result {
-                    Ok((text, memory_ops)) => {
+                    Ok((text, memory_ops, compacted)) => {
                         if !memory_ops.is_empty() {
                             let _lock = mem_lock.lock().await;
                             let mut mem = memory;
@@ -735,7 +738,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 }
                             }
                         }
-                        Some(text)
+                        // Return compacted history alongside text so the WS handler
+                        // can persist it to SQLite (surviving browser close/restart).
+                        let compacted_hist = if compacted { Some(hist) } else { None };
+                        Some((text, compacted_hist))
                     }
                     Err(e) => {
                         error!(error = %e, "Agent turn failed");
@@ -960,7 +966,24 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 if !partial_text.is_empty() {
                                     let final_text = if agent_handle.is_finished() {
                                         match agent_handle.await {
-                                            Ok(Some(full_text)) => full_text,
+                                            Ok(Some((full_text, compacted_hist))) => {
+                                                // Persist compaction to SQLite so it survives reconnects.
+                                                if let Some(compacted) = compacted_hist {
+                                                    let tuples: Vec<(String, String)> = compacted.iter()
+                                                        .map(|m| (m.role.clone(), m.content.clone()))
+                                                        .collect();
+                                                    if let Err(e) = state.chat_db.replace_session_messages(&session_id, &tuples) {
+                                                        error!(error = %e, "Compaction: failed to persist to DB");
+                                                    } else {
+                                                        // Replace in-memory history so the next turn's
+                                                        // hist_clone starts from the compacted state.
+                                                        history.clear();
+                                                        history.extend(compacted);
+                                                        info!("Compaction persisted to DB and applied to in-memory history");
+                                                    }
+                                                }
+                                                full_text
+                                            }
                                             _ => std::mem::take(&mut partial_text),
                                         }
                                     } else {

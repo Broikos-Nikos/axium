@@ -45,9 +45,17 @@ impl Compactor {
         }
 
         let prompt = format!(
-            "Summarize this conversation history concisely. \
-             Preserve all key decisions, file paths, code context, \
-             and user preferences. Output a bullet-point summary.\n\n{}",
+            "You are summarizing an AI assistant conversation for context carry-over. \
+             The summary will be injected at the start of the next turn so the assistant \
+             can continue without the full history.\n\n\
+             Rules:\n\
+             - One bullet per distinct fact. No narrative.\n\
+             - Keep: file paths edited, commands run, errors encountered, decisions made, \
+               user preferences stated, task status (done/pending/failed).\n\
+             - Omit: pleasantries, explanations already acted on, superseded plans.\n\
+             - If code was written, note the file and what it does — not the code itself.\n\
+             - Be terse. Every word must earn its place.\n\n\
+             Conversation to summarize:\n{}",
             history_text
         );
 

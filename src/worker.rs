@@ -310,7 +310,7 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
         let agent_output = drain.await.unwrap_or_default();
 
         let (raw_status, raw_result) = match run_result {
-            Ok(Ok((text, _))) => {
+            Ok(Ok((text, _, _compacted))) => {
                 let t = if text.is_empty() { agent_output } else { text };
                 ("done", t)
             }

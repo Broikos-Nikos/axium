@@ -136,7 +136,7 @@ pub async fn classify_and_run(
     task_db: &Arc<TaskDb>,
     cfg: TurnConfig,
     tx: &mpsc::UnboundedSender<AgentEvent>,
-) -> Result<(String, Vec<MemoryOp>)> {
+) -> Result<(String, Vec<MemoryOp>, bool)> {
     // Get the latest user message
     let user_msg = history.last()
         .map(|m| m.content.clone())
@@ -202,7 +202,7 @@ pub async fn classify_and_run(
                         if cfg.conversation_logging {
                             log_turn(&log_path, &user_msg, None, "classifier (trivial)", &answer);
                         }
-                        return Ok((answer, Vec::new()));
+                        return Ok((answer, Vec::new(), false));
                     }
                     Ok(PromptClass::Complex(enhanced)) => {
                         is_complex = true;
@@ -261,17 +261,30 @@ pub async fn classify_and_run(
     let mut all_memory_ops: Vec<MemoryOp> = Vec::new();
     let mut combined_text = String::new();
     let mut combined_tool_log = String::new();
+    let mut compacted = false;
 
     // Track history length before the loop — messages added during review rounds
     // are ephemeral (assistant drafts + [SYSTEM REVIEW] continuations) and MUST be
     // removed after the loop. Leaving them causes the model to see stale [SYSTEM REVIEW]
     // injections in future turns and misidentify real user messages as prompt injections.
-    let history_len_before_loop = history.len();
+    // If compaction fires inside run_agent_turn it shrinks history in-place, so we
+    // re-baseline after the call to keep the truncate correct.
+    let mut history_len_before_loop = history.len();
 
     for round in 0..MAX_VERIFY_ROUNDS {
-        let (text, mem_ops) = run_agent_turn(
+        let pre_turn_len = history.len();
+        let (text, mem_ops, turn_compacted) = run_agent_turn(
             classifier, sonnet, compactor, history, memory, soul_ref, project_context, task_db, &cfg, tx,
         ).await?;
+
+        // If history shrank, compaction happened in-place — update the baseline so
+        // the truncate at the end of the loop only removes ephemeral review messages.
+        if turn_compacted {
+            compacted = true;
+            history_len_before_loop = history.len();
+        } else if history.len() < pre_turn_len {
+            history_len_before_loop = history.len();
+        }
 
         all_memory_ops.extend(mem_ops);
         combined_text = text.clone();
@@ -400,7 +413,7 @@ pub async fn classify_and_run(
         }
     }
 
-    Ok((combined_text, all_memory_ops))
+    Ok((combined_text, all_memory_ops, compacted))
 }
 
 /// Run the full agent turn: plan → compaction → tool loop → heartbeat → final text.
@@ -408,14 +421,14 @@ pub async fn run_agent_turn(
     classifier: &Classifier,
     sonnet: &SonnetClient,
     compactor: &Compactor,
-    history: &[Message],
+    history: &mut Vec<Message>,
     memory: &Memory,
     soul: &str,
     project_context: &str,
     task_db: &Arc<TaskDb>,
     cfg: &TurnConfig,
     tx: &mpsc::UnboundedSender<AgentEvent>,
-) -> Result<(String, Vec<MemoryOp>)> {
+) -> Result<(String, Vec<MemoryOp>, bool)> {
     // Build active tasks summary (kept compact)
     let tasks_summary = match task_db.list_active_tasks() {
         Ok(tasks) if !tasks.is_empty() => {
@@ -435,27 +448,41 @@ pub async fn run_agent_turn(
 
     // --- Compaction check ---
     let token_est = estimate_tokens(history);
+    let mut did_compact = false;
     let mut api_msgs: Vec<serde_json::Value> = if token_est > cfg.token_limit && history.len() > 3 {
         info!(tokens = token_est, limit = cfg.token_limit, "Compacting conversation history");
         let split = history.len() - 3;
-        let (old, recent) = history.split_at(split);
 
-        let summary = compactor.compact(old).await.unwrap_or_else(|e| {
-            warn!(error = %e, "Compaction failed");
-            let _ = tx.send(AgentEvent::Error(
-                format!("Context compaction failed ({}). Conversation history may be incomplete.", e)
-            ));
-            format!("[compaction failed: {}]", e)
-        });
+        // Clone before mutation to avoid borrow conflicts
+        let old = history[..split].to_vec();
+        let recent = history[split..].to_vec();
 
-        let mut msgs = vec![serde_json::json!({
-            "role": "user",
-            "content": format!("[Previous conversation summary]\n{}", summary)
-        })];
-        for m in recent {
-            msgs.push(serde_json::json!({"role": m.role, "content": m.content}));
+        match compactor.compact(&old).await {
+            Ok(summary) => {
+                let summary_msg = format!("[Previous conversation summary]\n{}", summary);
+
+                // Replace history in-place so next turn starts from summary + recent,
+                // not the full pre-compaction history. Signal did_compact so the caller
+                // can persist this to SQLite (surviving browser close/restart).
+                history.clear();
+                history.push(Message { role: "user".to_string(), content: summary_msg.clone() });
+                history.extend(recent.iter().cloned());
+                did_compact = true;
+
+                let mut msgs = vec![serde_json::json!({"role": "user", "content": summary_msg})];
+                for m in &recent {
+                    msgs.push(serde_json::json!({"role": m.role, "content": m.content}));
+                }
+                msgs
+            }
+            Err(e) => {
+                warn!(error = %e, "Compaction failed, sending full history");
+                let _ = tx.send(AgentEvent::Error(
+                    format!("Context compaction failed ({}). Conversation history may be incomplete.", e)
+                ));
+                history.iter().map(|m| serde_json::json!({"role": m.role, "content": m.content})).collect()
+            }
         }
-        msgs
     } else {
         history
             .iter()
@@ -967,7 +994,7 @@ pub async fn run_agent_turn(
     let _ = tx.send(AgentEvent::Done);
 
     info!(iterations, text_len = final_text.len(), mem_ops = memory_ops.len(), "Agent turn complete");
-    Ok((final_text, memory_ops))
+    Ok((final_text, memory_ops, did_compact))
 }
 
 /// Maximum file size for read_file tool (1 MB).
@@ -1892,7 +1919,7 @@ fn run_subagent_task<'a>(
         Arc::clone(&cfg.http),
     );
 
-    let sub_history = vec![super::Message {
+    let mut sub_history = vec![super::Message {
         role: "user".to_string(),
         content: task.to_string(),
     }];
@@ -1931,10 +1958,10 @@ fn run_subagent_task<'a>(
 
     match run_agent_turn(
         &sub_classifier, &sub_sonnet, &sub_compactor,
-        &sub_history, &sub_memory, sub_soul, "",
+        &mut sub_history, &sub_memory, sub_soul, "",
         task_db, &sub_cfg, &sub_tx,
     ).await {
-        Ok((output, _memory_ops)) => {
+        Ok((output, _memory_ops, _compacted)) => {
             drop(sub_tx); // close channel so bridge drains and exits
             let _ = bridge.await;
             output
