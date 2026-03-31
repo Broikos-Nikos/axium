@@ -422,15 +422,20 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
     }).to_string();
     let _ = state.broadcast_tx.send(done_msg);
 
-    // Telegram notification
-    {
+    // Telegram notification — extract values first so the read lock is dropped before the await
+    let tg_notify = {
         let cfg = state.config.read().await;
         if cfg.settings.telegram_enabled && !cfg.settings.telegram_bot_token.is_empty() {
-            let summary = if result.len() > 300 { let mut b=300; while b>0 && !result.is_char_boundary(b) { b-=1; } format!("{}…", &result[..b]) } else { result.clone() };
-            let icon = if status == "done" { "✅" } else { "❌" };
-            let message = format!("{} Task #{} {}: {}\n\n{}", icon, task.id, status, task.title, summary);
-            let _ = notify_telegram(&cfg.settings.telegram_bot_token, &cfg.settings.telegram_allowed_users, &message, &state.http).await;
+            Some((cfg.settings.telegram_bot_token.clone(), cfg.settings.telegram_allowed_users.clone()))
+        } else {
+            None
         }
+    };
+    if let Some((tg_token, tg_users)) = tg_notify {
+        let summary = if result.len() > 300 { let mut b=300; while b>0 && !result.is_char_boundary(b) { b-=1; } format!("{}…", &result[..b]) } else { result.clone() };
+        let icon = if status == "done" { "✅" } else { "❌" };
+        let message = format!("{} Task #{} {}: {}\n\n{}", icon, task.id, status, task.title, summary);
+        let _ = notify_telegram(&tg_token, &tg_users, &message, &state.http).await;
     }
 
     Ok(())
