@@ -61,8 +61,8 @@ step "1/9  Pre-flight checks"
 # config.json — copy from example if missing, or generate a default
 if [ ! -f "$CONFIG" ]; then
     if [ -f "$PROJECT_DIR/config.example.json" ]; then
-        cp "$PROJECT_DIR/config.example.json" "$CONFIG"
-        ok "Created config.json from config.example.json — edit it to add your API keys"
+        mv "$PROJECT_DIR/config.example.json" "$CONFIG"
+        ok "Renamed config.example.json → config.json — edit it to add your API keys"
     else
         warn "config.example.json not found — generating a default config.json"
         cat > "$CONFIG" <<'DEFAULTCONFIG'
