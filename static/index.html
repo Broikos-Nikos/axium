@@ -2433,7 +2433,7 @@
   async function saveSettings() {
     settingsSave.disabled = true;
     settingsSave.textContent = 'Saving...';
-
+    try {
     const body = {
       primary: primarySelect.value,
       compactor: compactorSelect.value,
@@ -2462,7 +2462,6 @@
     body.telegram_allowed_users = telegramUsersInput.value.trim();
     body.telegram_enabled = telegramEnabledInput.checked;
     body.conversation_logging = convLogInput.checked;
-    try {
       const resp = await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2488,7 +2487,8 @@
         setTimeout(() => { settingsSave.textContent = 'Save Settings'; settingsSave.disabled = false; }, 2000);
       }
     } catch (e) {
-      settingsSave.textContent = 'Network error';
+      console.error('Settings save error:', e);
+      settingsSave.textContent = 'Error saving';
       setTimeout(() => { settingsSave.textContent = 'Save Settings'; settingsSave.disabled = false; }, 2000);
     }
   }
