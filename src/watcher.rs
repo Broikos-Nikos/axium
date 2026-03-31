@@ -1,12 +1,17 @@
 use std::path::Path;
 use tokio::sync::broadcast;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
+
+/// Type alias for the project context cache shared with AppState.
+type ProjectCache = std::sync::Arc<RwLock<Option<(std::time::Instant, String, String)>>>;
 
 /// Spawn a background file watcher that monitors `working_dir` for source file changes
 /// and broadcasts diagnostic messages (syntax errors, etc.) to connected WebSocket clients.
-pub fn spawn_watcher(working_dir: String, broadcast_tx: broadcast::Sender<String>) {
+/// Also invalidates the project context cache when source files change.
+pub fn spawn_watcher(working_dir: String, broadcast_tx: broadcast::Sender<String>, project_cache: ProjectCache) {
     tokio::spawn(async move {
-        if let Err(e) = run_watcher(working_dir, broadcast_tx).await {
+        if let Err(e) = run_watcher(working_dir, broadcast_tx, project_cache).await {
             warn!(error = %e, "File watcher stopped");
         }
     });
@@ -15,6 +20,7 @@ pub fn spawn_watcher(working_dir: String, broadcast_tx: broadcast::Sender<String
 async fn run_watcher(
     working_dir: String,
     broadcast_tx: broadcast::Sender<String>,
+    project_cache: ProjectCache,
 ) -> anyhow::Result<()> {
     use notify::{Event, EventKind, RecursiveMode, Watcher};
 
@@ -76,6 +82,11 @@ async fn run_watcher(
                 continue;
             }
             last_hash.insert(path_str.clone(), content_hash);
+            // Invalidate project context cache when source files change
+            {
+                let mut cache = project_cache.write().await;
+                *cache = None;
+            }
             // Cap hash map size to prevent unbounded growth
             if last_hash.len() > 1000 {
                 let keys: Vec<String> = last_hash.keys().take(200).cloned().collect();

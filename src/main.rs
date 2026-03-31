@@ -93,6 +93,8 @@ async fn main() -> Result<()> {
     // Telegram bot shutdown channel (replaced on each settings save)
     let (tg_shutdown_tx, tg_shutdown_rx) = tokio::sync::watch::channel(false);
 
+    let project_context_cache = std::sync::Arc::new(RwLock::new(None));
+
     let state = Arc::new(tui::server::AppState {
         config: RwLock::new(cfg),
         config_path: config_path.to_string(),
@@ -105,6 +107,7 @@ async fn main() -> Result<()> {
         broadcast_tx: broadcast_tx.clone(),
         telegram_shutdown: tokio::sync::Mutex::new(tg_shutdown_tx),
         plugin_manager,
+        project_context_cache: project_context_cache.clone(),
     });
 
     // Spawn background file watcher for the configured working directory
@@ -118,7 +121,7 @@ async fn main() -> Result<()> {
         } else {
             raw_wd
         };
-        watcher::spawn_watcher(working_dir, broadcast_tx);
+        watcher::spawn_watcher(working_dir, broadcast_tx, project_context_cache);
     }
     worker::spawn_worker(state.clone());
 

@@ -24,12 +24,14 @@ impl Message {
 
 /// Estimate tokens from text length.
 /// Uses ~3.5 chars/token for English (more accurate than /4).
-/// Accounts for message framing overhead.
+/// Accounts for message framing overhead and system prompt + tool definitions.
 pub fn estimate_tokens(messages: &[Message]) -> usize {
-    messages.iter().map(|m| {
+    // System prompt (~1700 tokens) + 28 tool definitions (~4300 tokens)
+    const SYSTEM_OVERHEAD: usize = 6000;
+    SYSTEM_OVERHEAD + messages.iter().map(|m| {
         // ~3.5 chars per token + 4 tokens per message framing (round up)
         (m.content.len() * 2 + 6) / 7 + 4
-    }).sum()
+    }).sum::<usize>()
 }
 
 /// Which API provider a model belongs to.

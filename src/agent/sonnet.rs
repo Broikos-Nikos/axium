@@ -16,8 +16,15 @@ pub struct Tool {
 }
 
 /// Anthropic-format tools array (built once).
+/// The last tool is tagged with cache_control so Anthropic caches the entire tools array.
 static TOOLS_ANTHROPIC: LazyLock<serde_json::Value> = LazyLock::new(|| {
-    serde_json::to_value(build_tools()).unwrap()
+    let mut tools = serde_json::to_value(build_tools()).unwrap();
+    if let Some(arr) = tools.as_array_mut() {
+        if let Some(last) = arr.last_mut() {
+            last["cache_control"] = serde_json::json!({"type": "ephemeral"});
+        }
+    }
+    tools
 });
 
 /// OpenAI-format functions array (built once).

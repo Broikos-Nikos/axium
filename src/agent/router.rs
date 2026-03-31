@@ -463,6 +463,14 @@ pub async fn run_agent_turn(
             .collect()
     };
 
+    // Token budget warning: if approaching the limit but not yet compacted,
+    // hint the model to be concise.
+    let system = if token_est > cfg.token_limit * 80 / 100 && token_est <= cfg.token_limit {
+        format!("{}\n\n[CONTEXT BUDGET] Conversation is approaching the token limit. Be concise.", system)
+    } else {
+        system
+    };
+
     let mut memory_ops: Vec<MemoryOp> = Vec::new();
     let mut final_text = String::new();
     let mut iterations = 0;
@@ -908,6 +916,20 @@ pub async fn run_agent_turn(
             tool_results.push(serde_json::json!({
                 "type": "text",
                 "text": "Some tools had errors. Analyze what went wrong and try a different approach."
+            }));
+        }
+
+        // Warn the model when approaching the tool iteration limit so it can wrap up gracefully.
+        if iterations >= cfg.max_tool_iterations.saturating_sub(3) {
+            let remaining = cfg.max_tool_iterations.saturating_sub(iterations);
+            tool_results.push(serde_json::json!({
+                "type": "text",
+                "text": format!(
+                    "[SYSTEM] You have {} iteration(s) remaining before the hard limit. \
+                    Wrap up now: finish any in-progress work and provide your final response to the user. \
+                    Do not start new tool chains.",
+                    remaining
+                )
             }));
         }
 

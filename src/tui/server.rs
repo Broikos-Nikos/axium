@@ -37,6 +37,32 @@ pub struct AppState {
     pub telegram_shutdown: Mutex<tokio::sync::watch::Sender<bool>>,
     /// Plugin manager for hook execution.
     pub plugin_manager: Arc<RwLock<crate::plugins::PluginManager>>,
+    /// Cached project context: (timestamp, working_dir, content). Invalidated by watcher or after 60s.
+    pub project_context_cache: Arc<RwLock<Option<(std::time::Instant, String, String)>>>,
+}
+
+/// Get project context, using the cached value if still valid (< 60s and same working_dir),
+/// otherwise rebuilding from disk.
+pub async fn get_project_context(state: &AppState, working_dir: &str) -> String {
+    const MAX_AGE: std::time::Duration = std::time::Duration::from_secs(60);
+
+    // Check cache
+    {
+        let cache = state.project_context_cache.read().await;
+        if let Some((ts, ref cached_wd, ref ctx)) = *cache {
+            if cached_wd == working_dir && ts.elapsed() < MAX_AGE {
+                return ctx.clone();
+            }
+        }
+    }
+
+    // Cache miss — rebuild
+    let ctx = project::build_project_context(working_dir);
+    {
+        let mut cache = state.project_context_cache.write().await;
+        *cache = Some((std::time::Instant::now(), working_dir.to_string(), ctx.clone()));
+    }
+    ctx
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -545,7 +571,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 } else {
                     wd.clone()
                 };
-                let ctx = project::build_project_context(&resolved_wd);
+                let ctx = get_project_context(&state, &resolved_wd).await;
                 (
                     user_text,
                     SonnetClient::new(

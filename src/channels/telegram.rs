@@ -10,7 +10,6 @@ use crate::agent::router::{self, AgentEvent, TurnConfig};
 use crate::agent::sonnet::SonnetClient;
 use crate::agent::Message;
 use crate::memory::store::Memory;
-use crate::tools::project;
 use crate::tui::server::AppState;
 
 /// Telegram's maximum message length for sendMessage.
@@ -289,7 +288,7 @@ impl TelegramBot {
             } else {
                 wd.clone()
             };
-            let ctx = project::build_project_context(&resolved_wd);
+            let ctx = crate::tui::server::get_project_context(&self.state, &resolved_wd).await;
             (
                 SonnetClient::new(
                     &cfg.api_keys.anthropic,

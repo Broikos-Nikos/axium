@@ -218,7 +218,7 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
         } else {
             raw_wd.clone()
         };
-        let project_ctx = crate::tools::project::build_project_context(&working_dir);
+        let project_ctx = crate::tui::server::get_project_context(&state, &working_dir).await;
         let tdir = tasks_dir(raw_wd);
 
         // Determine previous failure reason (stored in result if retrying)
