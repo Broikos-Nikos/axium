@@ -5,6 +5,13 @@ use serde::Serialize;
 use std::sync::{Mutex, MutexGuard};
 
 #[derive(Debug, Clone, Serialize)]
+pub struct HistorySearchResult {
+    pub session_id: String,
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SessionInfo {
     pub id: String,
     pub created_at: String,
@@ -48,7 +55,20 @@ impl ChatDb {
                 id TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL,
                 summary TEXT DEFAULT ''
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                session_id UNINDEXED,
+                role UNINDEXED,
+                content,
+                tokenize='unicode61'
             );",
+        )?;
+        // Populate FTS index for any existing messages not yet indexed.
+        // Uses rowid equality between messages and messages_fts to avoid re-indexing.
+        conn.execute_batch(
+            "INSERT INTO messages_fts(rowid, session_id, role, content)
+             SELECT id, session_id, role, content FROM messages
+             WHERE id NOT IN (SELECT rowid FROM messages_fts);",
         )?;
         Ok(Self { conn: Mutex::new(conn) })
     }
@@ -79,7 +99,13 @@ impl ChatDb {
         conn.prepare_cached(
             "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?1, ?2, ?3, ?4)",
         )?.execute(params![session_id, role, content, Utc::now().to_rfc3339()])?;
-        Ok(conn.last_insert_rowid())
+        let row_id = conn.last_insert_rowid();
+        // Keep FTS index in sync.
+        let _ = conn.execute(
+            "INSERT INTO messages_fts(rowid, session_id, role, content) VALUES (?1, ?2, ?3, ?4)",
+            params![row_id, session_id, role, content],
+        );
+        Ok(row_id)
     }
 
     pub fn load_session_messages(&self, session_id: &str) -> Result<Vec<ChatMessage>> {
@@ -273,5 +299,29 @@ impl ChatDb {
         }
         conn.execute_batch("COMMIT")?;
         Ok(())
+    }
+
+    /// Full-text search over all stored messages using the FTS5 index.
+    /// Returns up to `limit` matches ordered by relevance (BM25 rank).
+    pub fn search_history(&self, query: &str, limit: usize) -> Result<Vec<HistorySearchResult>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT session_id, role, content FROM messages_fts
+             WHERE content MATCH ?1
+             ORDER BY rank
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![query, limit as i64], |row| {
+            Ok(HistorySearchResult {
+                session_id: row.get(0)?,
+                role: row.get(1)?,
+                content: row.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 }

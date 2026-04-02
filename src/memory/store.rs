@@ -7,6 +7,8 @@ const DEFAULT_MEMORY: &str = "\
 
 ## User Preferences
 
+## User Model
+
 ## Active Projects
 
 ## Key Facts

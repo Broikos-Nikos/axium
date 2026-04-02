@@ -7,6 +7,15 @@ use tokio::sync::mpsc;
 
 use super::{resolve_provider, Provider};
 
+/// Token usage data reported by the API.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct ApiUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
+}
+
 /// Tool definition sent to the LLM API.
 #[derive(Debug, Clone, Serialize)]
 pub struct Tool {
@@ -21,7 +30,7 @@ static TOOLS_ANTHROPIC: LazyLock<serde_json::Value> = LazyLock::new(|| {
     let mut tools = serde_json::to_value(build_tools()).unwrap();
     if let Some(arr) = tools.as_array_mut() {
         if let Some(last) = arr.last_mut() {
-            last["cache_control"] = serde_json::json!({"type": "ephemeral"});
+            last["cache_control"] = serde_json::json!({"type": "ephemeral", "ttl": "1h"});
         }
     }
     tools
@@ -30,6 +39,47 @@ static TOOLS_ANTHROPIC: LazyLock<serde_json::Value> = LazyLock::new(|| {
 /// OpenAI-format functions array (built once).
 static TOOLS_OPENAI: LazyLock<serde_json::Value> = LazyLock::new(|| {
     let tools = build_tools();
+    serde_json::json!(tools.iter().map(|t| serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": t.name,
+            "description": t.description,
+            "parameters": t.input_schema,
+        }
+    })).collect::<Vec<_>>())
+});
+
+/// Tools included in the minimal set (for "simple" mode).
+/// Excludes heavy scaffolding tools (subagents, task queuing, code intelligence, destructive ops).
+const MINIMAL_TOOL_NAMES: &[&str] = &[
+    "run_command", "read_file", "write_file", "append_file", "patch_file",
+    "search_files", "list_directory", "scan_project", "browse_url", "web_search",
+    "git_command", "update_memory", "update_user_model", "ask_user", "send_email",
+    "send_file", "update_project_knowledge", "search_history",
+];
+
+fn build_minimal_tools() -> Vec<Tool> {
+    build_tools()
+        .into_iter()
+        .filter(|t| MINIMAL_TOOL_NAMES.contains(&t.name.as_str()))
+        .collect()
+}
+
+/// Minimal Anthropic-format tools array (for "simple" mode).
+/// Last tool tagged with cache_control so Anthropic caches this smaller array too.
+static TOOLS_MINIMAL_ANTHROPIC: LazyLock<serde_json::Value> = LazyLock::new(|| {
+    let mut tools = serde_json::to_value(build_minimal_tools()).unwrap();
+    if let Some(arr) = tools.as_array_mut() {
+        if let Some(last) = arr.last_mut() {
+            last["cache_control"] = serde_json::json!({"type": "ephemeral", "ttl": "1h"});
+        }
+    }
+    tools
+});
+
+/// Minimal OpenAI-format functions array (for "simple" mode).
+static TOOLS_MINIMAL_OPENAI: LazyLock<serde_json::Value> = LazyLock::new(|| {
+    let tools = build_minimal_tools();
     serde_json::json!(tools.iter().map(|t| serde_json::json!({
         "type": "function",
         "function": {
@@ -64,6 +114,10 @@ impl SonnetClient {
 
     pub fn model_name(&self) -> &str {
         &self.model
+    }
+
+    pub fn max_tokens(&self) -> usize {
+        self.max_tokens
     }
 }
 
@@ -288,7 +342,8 @@ fn build_tools() -> Vec<Tool> {
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "task": { "type": "string", "description": "Complete task description for the sub-agent. Be specific — it has no context from this conversation." }
+                        "task": { "type": "string", "description": "Complete task description for the sub-agent. Be specific — it has no context from this conversation." },
+                        "model": { "type": "string", "enum": ["fast", "primary"], "description": "Model to use: 'fast' (default, uses continuation model — cheaper) or 'primary' (full primary model for complex reasoning)." }
                     },
                     "required": ["task"]
                 }),
@@ -426,6 +481,40 @@ fn build_tools() -> Vec<Tool> {
                     "required": ["path"]
                 }),
             },
+            Tool {
+                name: "rollback_changes".into(),
+                description: "Discard all uncommitted file changes in the working directory, restoring to the last git commit. Use this when you realize your approach was wrong and want to start fresh. WARNING: this cannot be undone.".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "reason": { "type": "string", "description": "Brief explanation of why you're rolling back" }
+                    },
+                    "required": ["reason"]
+                }),
+            },
+            Tool {
+                name: "search_history".into(),
+                description: "Full-text search over past conversation history using the local FTS5 index. Use this to recall what was discussed, decided, or worked on in previous sessions. Returns matching messages with their session context.".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Search terms or phrase to find in conversation history" },
+                        "limit": { "type": "integer", "description": "Maximum number of results to return (default: 10, max: 30)" }
+                    },
+                    "required": ["query"]
+                }),
+            },
+            Tool {
+                name: "update_user_model".into(),
+                description: "Proactively update your persistent model of the user: communication style, expertise level, recurring interests, preferences, and inferred patterns. Call this at the end of a session when you've learned something meaningful about the user — no explicit user instruction needed. Be concise and specific.".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "observation": { "type": "string", "description": "A concise, specific inference about the user (e.g. 'prefers terse answers', 'deep Rust expertise', 'works on embedded systems')" }
+                    },
+                    "required": ["observation"]
+                }),
+            },
         ]
 }
 
@@ -433,6 +522,10 @@ fn build_tools() -> Vec<Tool> {
 /// cache_control and a dynamic block (memory/tasks) without caching.
 /// Soul rarely changes → gets cached. Memory/tasks change every turn → not cached.
 /// Falls back to a single block if either part is empty (Anthropic rejects empty text blocks).
+///
+/// Uses 1-hour cache TTL for system blocks — they change infrequently and should survive
+/// long tool loops. Message breakpoints use the default 5-minute TTL (set elsewhere).
+/// Critical: 1-hour entries MUST appear before 5-minute entries in the request (Anthropic rule).
 fn build_system_blocks(system: &str) -> serde_json::Value {
     const MARKER: &str = "\n\n[MEMORY]\n";
     if let Some(idx) = system.find(MARKER) {
@@ -440,21 +533,23 @@ fn build_system_blocks(system: &str) -> serde_json::Value {
         let dynamic = &system[idx + MARKER.len()..];
         if !soul.is_empty() && !dynamic.trim().is_empty() {
             return serde_json::json!([
-                {"type": "text", "text": soul, "cache_control": {"type": "ephemeral"}},
-                {"type": "text", "text": dynamic}
+                {"type": "text", "text": soul, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                {"type": "text", "text": dynamic, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
             ]);
         }
     }
-    serde_json::json!([{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}])
+    serde_json::json!([{"type": "text", "text": system, "cache_control": {"type": "ephemeral", "ttl": "1h"}}])
 }
 
 impl SonnetClient {
-    pub fn tools_anthropic() -> &'static serde_json::Value {
-        &TOOLS_ANTHROPIC
+    /// Return the tools array for a given mode.
+    /// "simple" mode gets the minimal set; everything else gets the full set.
+    fn tools_for_mode_anthropic(mode: &str) -> &'static serde_json::Value {
+        if mode == "simple" { &TOOLS_MINIMAL_ANTHROPIC } else { &TOOLS_ANTHROPIC }
     }
 
-    pub fn tools_openai() -> &'static serde_json::Value {
-        &TOOLS_OPENAI
+    fn tools_for_mode_openai(mode: &str) -> &'static serde_json::Value {
+        if mode == "simple" { &TOOLS_MINIMAL_OPENAI } else { &TOOLS_OPENAI }
     }
 
     /// Make a streaming API call. Sends text deltas through `delta_tx` as they arrive.
@@ -462,16 +557,32 @@ impl SonnetClient {
     ///
     /// When `force_tool` is true, sets `tool_choice` to require the model to produce at
     /// least one tool call instead of a text-only response.
+    ///
+    /// `effort` controls Anthropic extended thinking: "off"/"" = disabled,
+    /// "low"/"medium"/"high"/"max" = adaptive thinking at that intensity.
+    ///
+    /// `mode` selects the tool subset: "simple" uses the minimal set (~18 tools);
+    /// all other modes use the full set (~31 tools), saving ~4 k tokens per call in simple mode.
+    ///
+    /// For Anthropic: tags the last message with `cache_control` so the entire conversation
+    /// prefix gets cached across tool-loop iterations (up to 90% savings on repeated prefixes).
     pub async fn call_streaming(
         &self,
         system: &str,
-        messages: &[serde_json::Value],
+        messages: &mut Vec<serde_json::Value>,
         delta_tx: &mpsc::UnboundedSender<String>,
         force_tool: bool,
+        effort: &str,
+        mode: &str,
     ) -> Result<serde_json::Value> {
         match self.provider {
-            Provider::Anthropic => self.call_anthropic_streaming(system, messages, delta_tx, force_tool).await,
-            Provider::OpenAI => self.call_openai_streaming(system, messages, delta_tx, force_tool).await,
+            Provider::Anthropic => {
+                tag_last_message_for_cache(messages);
+                let result = self.call_anthropic_streaming(system, messages, delta_tx, force_tool, effort, mode).await;
+                untag_last_message_cache(messages);
+                result
+            }
+            Provider::OpenAI => self.call_openai_streaming(system, messages, delta_tx, force_tool, mode).await,
         }
     }
 
@@ -483,15 +594,28 @@ impl SonnetClient {
         messages: &[serde_json::Value],
         delta_tx: &mpsc::UnboundedSender<String>,
         force_tool: bool,
+        effort: &str,
+        mode: &str,
     ) -> Result<serde_json::Value> {
+        let thinking_enabled = matches!(effort, "low" | "medium" | "high" | "max");
+        let max_tokens = if thinking_enabled {
+            // Adaptive thinking needs headroom for both thinking + output
+            self.max_tokens.max(16384)
+        } else {
+            self.max_tokens
+        };
         let mut body = serde_json::json!({
             "model": self.model,
-            "max_tokens": self.max_tokens,
+            "max_tokens": max_tokens,
             "system": build_system_blocks(system),
             "messages": messages,
-            "tools": Self::tools_anthropic(),
+            "tools": Self::tools_for_mode_anthropic(mode),
             "stream": true,
         });
+        if thinking_enabled {
+            body["thinking"] = serde_json::json!({"type": "adaptive"});
+            body["output_config"] = serde_json::json!({"effort": effort});
+        }
         if force_tool {
             body["tool_choice"] = serde_json::json!({"type": "any"});
         }
@@ -521,10 +645,13 @@ impl SonnetClient {
         let mut content_blocks: Vec<serde_json::Value> = Vec::new();
         let mut stop_reason = "end_turn".to_string();
         let mut current_text = String::new();
+        let mut current_thinking = String::new();
         let mut current_tool_json = String::new();
         let mut current_tool_id = String::new();
         let mut current_tool_name = String::new();
         let mut in_tool_block = false;
+        let mut in_thinking_block = false;
+        let mut usage = ApiUsage::default();
 
         let mut stream = resp.bytes_stream();
         let mut raw_buf: Vec<u8> = Vec::new();
@@ -566,18 +693,32 @@ impl SonnetClient {
                 };
 
                 match event["type"].as_str() {
+                    Some("message_start") => {
+                        if let Some(u) = event["message"]["usage"].as_object() {
+                            usage.input_tokens = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            usage.cache_creation_tokens = u.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            usage.cache_read_tokens = u.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                        }
+                    }
                     Some("content_block_start") => {
                         let block = &event["content_block"];
                         match block["type"].as_str() {
+                            Some("thinking") => {
+                                current_thinking.clear();
+                                in_thinking_block = true;
+                                in_tool_block = false;
+                            }
                             Some("text") => {
                                 current_text.clear();
                                 in_tool_block = false;
+                                in_thinking_block = false;
                             }
                             Some("tool_use") => {
                                 current_tool_id = block["id"].as_str().unwrap_or("").to_string();
                                 current_tool_name = block["name"].as_str().unwrap_or("").to_string();
                                 current_tool_json.clear();
                                 in_tool_block = true;
+                                in_thinking_block = false;
                             }
                             _ => {}
                         }
@@ -585,6 +726,13 @@ impl SonnetClient {
                     Some("content_block_delta") => {
                         let delta = &event["delta"];
                         match delta["type"].as_str() {
+                            Some("thinking_delta") => {
+                                if let Some(text) = delta["thinking"].as_str() {
+                                    current_thinking.push_str(text);
+                                    // Stream thinking to UI wrapped in tags so the frontend can style it
+                                    let _ = delta_tx.send(format!("<think>{}</think>", text));
+                                }
+                            }
                             Some("text_delta") => {
                                 if let Some(text) = delta["text"].as_str() {
                                     current_text.push_str(text);
@@ -600,7 +748,17 @@ impl SonnetClient {
                         }
                     }
                     Some("content_block_stop") => {
-                        if !in_tool_block && !current_text.is_empty() {
+                        if in_thinking_block && !current_thinking.is_empty() {
+                            // Include thinking blocks in the response so they can be passed
+                            // back on the next tool-loop iteration (interleaved thinking).
+                            content_blocks.push(serde_json::json!({
+                                "type": "thinking",
+                                "thinking": current_thinking.clone()
+                            }));
+                            current_thinking.clear();
+                            in_thinking_block = false;
+                        }
+                        if !in_tool_block && !in_thinking_block && !current_text.is_empty() {
                             content_blocks.push(serde_json::json!({
                                 "type": "text",
                                 "text": current_text.clone()
@@ -626,6 +784,9 @@ impl SonnetClient {
                         if let Some(sr) = event["delta"]["stop_reason"].as_str() {
                             stop_reason = sr.to_string();
                         }
+                        if let Some(out) = event["usage"]["output_tokens"].as_u64() {
+                            usage.output_tokens = out;
+                        }
                     }
                     _ => {}
                 }
@@ -637,7 +798,13 @@ impl SonnetClient {
 
         Ok(serde_json::json!({
             "content": content_blocks,
-            "stop_reason": stop_reason
+            "stop_reason": stop_reason,
+            "usage": {
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cache_creation_input_tokens": usage.cache_creation_tokens,
+                "cache_read_input_tokens": usage.cache_read_tokens,
+            }
         }))
     }
 
@@ -647,6 +814,7 @@ impl SonnetClient {
         messages: &[serde_json::Value],
         delta_tx: &mpsc::UnboundedSender<String>,
         force_tool: bool,
+        mode: &str,
     ) -> Result<serde_json::Value> {
         let mut oai_msgs = vec![serde_json::json!({"role": "system", "content": system})];
         for m in messages {
@@ -657,8 +825,9 @@ impl SonnetClient {
             "model": self.model,
             "max_tokens": self.max_tokens,
             "messages": oai_msgs,
-            "tools": Self::tools_openai(),
+            "tools": Self::tools_for_mode_openai(mode),
             "stream": true,
+            "stream_options": {"include_usage": true},
         });
         if force_tool {
             body["tool_choice"] = serde_json::json!("required");
@@ -687,6 +856,7 @@ impl SonnetClient {
         let mut content_text = String::new();
         let mut finish_reason = "stop".to_string();
         let mut tool_call_map: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
+        let mut usage = ApiUsage::default();
 
         let mut stream = resp.bytes_stream();
         let mut raw_buf: Vec<u8> = Vec::new();
@@ -736,6 +906,12 @@ impl SonnetClient {
 
                 if let Some(fr) = choice["finish_reason"].as_str() {
                     finish_reason = fr.to_string();
+                }
+
+                // OpenAI sends usage in the final chunk when stream_options.include_usage is set
+                if let Some(u) = event["usage"].as_object() {
+                    usage.input_tokens = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    usage.output_tokens = u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
                 }
 
                 if let Some(text) = delta["content"].as_str() {
@@ -798,8 +974,57 @@ impl SonnetClient {
 
         Ok(serde_json::json!({
             "content": content_blocks,
-            "stop_reason": stop_reason
+            "stop_reason": stop_reason,
+            "usage": {
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cache_creation_input_tokens": usage.cache_creation_tokens,
+                "cache_read_input_tokens": usage.cache_read_tokens,
+            }
         }))
+    }
+}
+
+/// Tag the last message in the array with `cache_control` so Anthropic caches the entire
+/// conversation prefix. Within a tool loop, iterations 2-N get ~90% cache hits on the prefix.
+/// Uses 1 of Anthropic's 4 allowed cache breakpoints.
+fn tag_last_message_for_cache(messages: &mut [serde_json::Value]) {
+    let Some(last) = messages.last_mut() else { return };
+    if let Some(content_str) = last["content"].as_str().map(|s| s.to_string()) {
+        // Convert string content to block format with cache_control
+        last["content"] = serde_json::json!([{
+            "type": "text",
+            "text": content_str,
+            "cache_control": {"type": "ephemeral"}
+        }]);
+    } else if let Some(arr) = last["content"].as_array_mut() {
+        // Content is already block format (e.g. tool_result blocks) — tag the last block
+        if let Some(last_block) = arr.last_mut() {
+            last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
+        }
+    }
+}
+
+/// Remove the cache_control tag added by `tag_last_message_for_cache` so the breakpoint
+/// can move forward on the next iteration.
+fn untag_last_message_cache(messages: &mut [serde_json::Value]) {
+    let Some(last) = messages.last_mut() else { return };
+    if let Some(arr) = last["content"].as_array_mut() {
+        // If we created a single-element text array, convert back to plain string
+        if arr.len() == 1 && arr[0]["type"].as_str() == Some("text") {
+            if arr[0].get("cache_control").is_some() {
+                if let Some(text) = arr[0]["text"].as_str().map(|s| s.to_string()) {
+                    last["content"] = serde_json::json!(text);
+                    return;
+                }
+            }
+        }
+        // Otherwise just strip cache_control from the last block
+        if let Some(last_block) = arr.last_mut() {
+            if let Some(obj) = last_block.as_object_mut() {
+                obj.remove("cache_control");
+            }
+        }
     }
 }
 

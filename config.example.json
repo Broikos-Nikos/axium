@@ -13,7 +13,9 @@
     "continuation": "",
     "continuation_provider": "",
     "review": "gpt-4.1-mini",
-    "review_provider": "openai"
+    "review_provider": "openai",
+    "fallback": "",
+    "fallback_provider": ""
   },
   "available_models": {
     "anthropic": [
@@ -46,7 +48,7 @@
     "max_input_chars": 12000,
     "max_retries": 2,
     "max_sessions": 50,
-    "working_directory": "/home/yourname",
+    "working_directory": "/home/bro/Desktop",
     "smtp_host": "",
     "smtp_port": 587,
     "smtp_user": "",
@@ -55,6 +57,8 @@
     "telegram_bot_token": "",
     "telegram_allowed_users": "",
     "telegram_enabled": false,
-    "conversation_logging": false
+    "conversation_logging": false,
+    "compaction_threshold": 60,
+    "thinking_effort": "high"
   }
 }

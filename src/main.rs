@@ -108,6 +108,9 @@ async fn main() -> Result<()> {
         telegram_shutdown: tokio::sync::Mutex::new(tg_shutdown_tx),
         plugin_manager,
         project_context_cache: project_context_cache.clone(),
+        conv_log_buffer: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        flush_notify: Arc::new(tokio::sync::Notify::new()),
+        task_file_buffers: Arc::new(RwLock::new(std::collections::HashMap::new())),
     });
 
     // Spawn background file watcher for the configured working directory
@@ -124,6 +127,23 @@ async fn main() -> Result<()> {
         watcher::spawn_watcher(working_dir, broadcast_tx, project_context_cache);
     }
     worker::spawn_worker(state.clone());
+
+    // Background flush task: wakes every 30s or when signalled (buffer threshold / /api/flush)
+    {
+        let flush_state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = flush_state.flush_notify.notified() => {}
+                }
+                tui::server::flush_conv_log(&flush_state).await;
+                tui::server::flush_task_buffers(&flush_state).await;
+            }
+        });
+    }
 
     let app = tui::server::build_router(state.clone());
 
@@ -182,6 +202,9 @@ async fn main() -> Result<()> {
     .with_graceful_shutdown(shutdown)
     .await?;
 
+    // Flush any remaining in-memory write buffers before exiting
+    tui::server::flush_conv_log(&state).await;
+    tui::server::flush_task_buffers(&state).await;
     info!("Server stopped");
     Ok(())
 }

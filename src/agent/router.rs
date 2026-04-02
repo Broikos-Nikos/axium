@@ -9,6 +9,7 @@ use super::compactor::Compactor;
 use super::sonnet::SonnetClient;
 use super::{estimate_tokens, Message};
 use crate::db::tasks::TaskDb;
+use crate::db::history::ChatDb;
 use crate::memory::store::Memory;
 use crate::tools;
 
@@ -50,6 +51,8 @@ pub enum AgentEvent {
     SetAutonomous { enabled: bool },
     /// Agent queued a background task.
     TaskQueued { id: i64, title: String },
+    /// Token usage from an API call (for cost tracking in UI).
+    TokenUsage { input: u64, output: u64, cache_read: u64, cache_write: u64, model: String },
 }
 
 impl std::fmt::Debug for AgentEvent {
@@ -71,8 +74,17 @@ impl std::fmt::Debug for AgentEvent {
             Self::Retry => write!(f, "Retry"),
             Self::SetAutonomous { enabled } => write!(f, "SetAutonomous({})", enabled),
             Self::TaskQueued { id, .. } => write!(f, "TaskQueued({})", id),
+            Self::TokenUsage { model, input, .. } => write!(f, "TokenUsage({}, in={})", model, input),
         }
     }
+}
+
+/// Pairs a conversation log buffer with its flush notifier.
+/// Present only on interactive turns; `None` for worker/sub-agent turns.
+#[derive(Clone)]
+pub struct ConvLogger {
+    pub buffer: Arc<tokio::sync::Mutex<Vec<String>>>,
+    pub notify: Arc<tokio::sync::Notify>,
 }
 
 /// Configuration for a single agent turn.
@@ -113,6 +125,18 @@ pub struct TurnConfig {
     pub review_provider: String,
     /// Plugin manager for hook execution (None in sub-agents).
     pub plugin_manager: Option<std::sync::Arc<tokio::sync::RwLock<crate::plugins::PluginManager>>>,
+    /// Percentage of token_limit at which compaction triggers (0-100).
+    pub compaction_threshold: usize,
+    /// Anthropic extended thinking effort: "off", "low", "medium", "high", "max".
+    pub thinking_effort: String,
+    /// Fallback model used when primary fails after max_retries. Empty = disabled.
+    pub fallback_model: String,
+    /// API provider for the fallback model (mirrors `fallback_model`).
+    pub fallback_provider: String,
+    /// Buffered conversation log. Present on interactive turns; None for worker/sub-agent turns.
+    pub conv_logger: Option<ConvLogger>,
+    /// Chat database for cross-session history search.
+    pub chat_db: Arc<ChatDb>,
 }
 
 /// A pending memory operation returned from the agent loop.
@@ -152,6 +176,7 @@ pub async fn classify_and_run(
     let should_classify = user_msg.len() > 2 && !user_msg.starts_with("[Previous conversation summary]");
 
     let mut is_complex = false;
+    let mut is_medium = false;
     let mut enhanced_msg: Option<String> = None;
     let mut skill_context = String::new();
 
@@ -200,7 +225,7 @@ pub async fn classify_and_run(
                         let _ = tx.send(AgentEvent::Text(answer.clone()));
                         let _ = tx.send(AgentEvent::Done);
                         if cfg.conversation_logging {
-                            log_turn(&log_path, &user_msg, None, "classifier (trivial)", &answer);
+                            record_conv_turn(&cfg, &log_path, &user_msg, None, "classifier (trivial)", &answer).await;
                         }
                         return Ok((answer, Vec::new(), false));
                     }
@@ -228,6 +253,14 @@ pub async fn classify_and_run(
                             detail: "Direct to primary model".into(),
                         });
                     }
+                    Ok(PromptClass::Medium) => {
+                        is_medium = true;
+                        info!(class = "medium", "Classifier: medium complexity — skip review, keep tests");
+                        let _ = tx.send(AgentEvent::Classified {
+                            class: "medium".into(),
+                            detail: "Medium task — primary model, tests only".into(),
+                        });
+                    }
                     Err(e) => {
                         warn!(error = %e, "Classification failed, falling through to primary");
                     }
@@ -242,6 +275,7 @@ pub async fn classify_and_run(
         let _ = pm.run_hook("on_classified", &serde_json::json!({
             "mode": cfg.mode,
             "is_complex": is_complex,
+            "is_medium": is_medium,
             "user_text": user_msg,
         })).await;
     }
@@ -301,11 +335,24 @@ pub async fn classify_and_run(
         }
 
         // Append assistant response to history for context in next round.
-        // Strip tool_log — reviewer already has it; keeping it inflates context on every turn.
-        history.push(Message { role: "assistant".into(), content: strip_tool_log(&text) });
+        // Strip tool_log and think tags — tool_log is already captured in combined_tool_log,
+        // and think tags contain stale planning that can mislead the model on subsequent turns.
+        history.push(Message { role: "assistant".into(), content: strip_think_tags(&strip_tool_log(&text)) });
 
         // Only run quality review loop for complex tasks
         if !is_complex || round >= MAX_VERIFY_ROUNDS - 1 {
+            break;
+        }
+
+        // Skip quality review if all tools succeeded and agent produced a substantial response —
+        // the LLM call is unnecessary when the outcome is clearly complete.
+        let all_tools_ok = !combined_tool_log.is_empty()
+            && !combined_tool_log.lines().any(|l| l.starts_with("✗"));
+        let visible_text = strip_tool_log(&combined_text);
+        let visible_len = strip_think_tags(&visible_text).trim().len();
+        const QR_SKIP_THRESHOLD: usize = 400;
+        if all_tools_ok && visible_len >= QR_SKIP_THRESHOLD {
+            info!(round, visible_len, "Skipping quality review: all tools succeeded + substantial response");
             break;
         }
 
@@ -347,44 +394,47 @@ pub async fn classify_and_run(
     history.truncate(history_len_before_loop);
 
     if cfg.conversation_logging {
-        log_turn(&log_path, &user_msg, enhanced_msg.as_deref(), sonnet.model_name(), &combined_text);
+        record_conv_turn(&cfg, &log_path, &user_msg, enhanced_msg.as_deref(), sonnet.model_name(), &combined_text).await;
     }
 
-    // Post-turn: code review + test generation for complex tasks with git-tracked changes
-    if is_complex && !combined_tool_log.is_empty() && !cfg.review_model.is_empty() {
-        let diff = tokio::process::Command::new("git")
-            .args(["diff"])
-            .current_dir(&cfg.working_directory)
-            .output().await
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .unwrap_or_default();
+    // Post-turn: code review + test generation for complex tasks, test execution for medium+complex
+    if (is_complex || is_medium) && !combined_tool_log.is_empty() {
+        // Code review + test generation: complex tasks only (not medium)
+        if is_complex && !cfg.review_model.is_empty() {
+            let diff = tokio::process::Command::new("git")
+                .args(["diff"])
+                .current_dir(&cfg.working_directory)
+                .output().await
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .unwrap_or_default();
 
-        if diff.trim().len() > 50 {
-            let reviewer = crate::agent::classifier::CodeReviewer::new(
-                &cfg.anthropic_key,
-                &cfg.openai_key,
-                &cfg.review_model,
-                &cfg.review_provider,
-                Arc::clone(&cfg.http),
-            );
-            let (review_result, test_result) = tokio::join!(
-                reviewer.code_review(&diff, &user_msg),
-                reviewer.generate_tests(&diff, &user_msg),
-            );
-            if let Some(review) = review_result {
-                info!("Code review found issues");
-                let _ = tx.send(AgentEvent::Text(format!("\n\n**[CODE REVIEW]**\n{}", review)));
-                combined_text.push_str(&format!("\n\n[CODE REVIEW]\n{}", review));
-            }
-            if let Some(tests) = test_result {
-                info!("Test suggestions generated");
-                let _ = tx.send(AgentEvent::Text(format!("\n\n**[TEST SUGGESTIONS]**\n{}", tests)));
-                combined_text.push_str(&format!("\n\n[TEST SUGGESTIONS]\n{}", tests));
+            if diff.trim().len() > 500 {
+                let reviewer = crate::agent::classifier::CodeReviewer::new(
+                    &cfg.anthropic_key,
+                    &cfg.openai_key,
+                    &cfg.review_model,
+                    &cfg.review_provider,
+                    Arc::clone(&cfg.http),
+                );
+                let (review_result, test_result) = tokio::join!(
+                    reviewer.code_review(&diff, &user_msg),
+                    reviewer.generate_tests(&diff, &user_msg),
+                );
+                if let Some(review) = review_result {
+                    info!("Code review found issues");
+                    let _ = tx.send(AgentEvent::Text(format!("\n\n**[CODE REVIEW]**\n{}", review)));
+                    combined_text.push_str(&format!("\n\n[CODE REVIEW]\n{}", review));
+                }
+                if let Some(tests) = test_result {
+                    info!("Test suggestions generated");
+                    let _ = tx.send(AgentEvent::Text(format!("\n\n**[TEST SUGGESTIONS]**\n{}", tests)));
+                    combined_text.push_str(&format!("\n\n[TEST SUGGESTIONS]\n{}", tests));
+                }
             }
         }
 
-        // Auto-run existing project tests to catch regressions
+        // Auto-run existing project tests to catch regressions (medium + complex)
         if let Some((cmd, args)) = detect_test_command(&cfg.working_directory) {
             info!(cmd = %cmd, "Auto-running project tests");
             let _ = tx.send(AgentEvent::Text("\n\n**[RUNNING TESTS]**...".to_string()));
@@ -408,6 +458,60 @@ pub async fn classify_and_run(
                     let fail_msg = format!("\n\n[TEST FAILURES]\n{}", capped.trim());
                     let _ = tx.send(AgentEvent::Text(fail_msg.clone()));
                     combined_text.push_str(&fail_msg);
+
+                    // Auto-repair: re-run the agent to fix test failures (up to 2 attempts)
+                    const MAX_REPAIR_ATTEMPTS: usize = 2;
+                    let mut repair_attempt = 0;
+                    while repair_attempt < MAX_REPAIR_ATTEMPTS {
+                        repair_attempt += 1;
+                        info!(attempt = repair_attempt, "Auto-repair: re-running agent to fix test failures");
+                        let _ = tx.send(AgentEvent::Text(format!(
+                            "\n\n**[AUTO-REPAIR attempt {}/{}]** Fixing test failures...",
+                            repair_attempt, MAX_REPAIR_ATTEMPTS
+                        )));
+                        let repair_msg = format!(
+                            "Tests failed after your changes. Fix the code so the tests pass.\n\
+                            Test output:\n{}\n\n\
+                            Fix the source code (not the tests, unless the tests themselves are wrong). \
+                            Then the tests will be re-run automatically.",
+                            capped.trim()
+                        );
+                        history.push(Message::user(&repair_msg));
+                        let (repair_text, repair_ops, _) = run_agent_turn(
+                            classifier, sonnet, compactor, history, memory, soul_ref, project_context, task_db, &cfg, tx,
+                        ).await?;
+                        history.push(Message { role: "assistant".into(), content: strip_think_tags(&strip_tool_log(&repair_text)) });
+                        all_memory_ops.extend(repair_ops);
+                        combined_text.push_str(&format!("\n\n{}", repair_text));
+
+                        // Re-run tests
+                        let _ = tx.send(AgentEvent::Text("\n\n**[RE-RUNNING TESTS]**...".to_string()));
+                        let retest = tokio::time::timeout(
+                            std::time::Duration::from_secs(120),
+                            tokio::process::Command::new(&cmd)
+                                .args(&args)
+                                .current_dir(&cfg.working_directory)
+                                .kill_on_drop(true)
+                                .output(),
+                        ).await;
+                        if let Ok(Ok(retest_out)) = retest {
+                            if retest_out.status.success() {
+                                let _ = tx.send(AgentEvent::Text("\n**[TESTS PASSED after repair]**".to_string()));
+                                combined_text.push_str("\n\n[TESTS PASSED after repair]");
+                                break;
+                            } else {
+                                let re_stderr = String::from_utf8_lossy(&retest_out.stderr);
+                                let re_stdout = String::from_utf8_lossy(&retest_out.stdout);
+                                let re_combined = format!("{}\n{}", re_stdout, re_stderr);
+                                let re_capped = truncate_tail(&re_combined, 3000);
+                                let re_fail = format!("\n\n[TESTS STILL FAILING]\n{}", re_capped.trim());
+                                let _ = tx.send(AgentEvent::Text(re_fail.clone()));
+                                combined_text.push_str(&re_fail);
+                            }
+                        } else {
+                            break; // timeout — stop retrying
+                        }
+                    }
                 }
             }
         }
@@ -440,18 +544,52 @@ pub async fn run_agent_turn(
         _ => String::new(),
     };
 
-    // Build system prompt
+    // Build system prompt — soul + memory + project only (stable content that caches well).
+    // tasks_summary is intentionally excluded: it changes frequently (task create/update/complete)
+    // and would bust the Anthropic cache for the entire memory+project block on every change.
+    // Tasks are injected into api_msgs below so they land in the volatile messages layer instead.
     let system = format!(
-        "{}\n\n[MEMORY]\n{}\n{}\n{}",
-        soul, memory.content, project_context, tasks_summary
+        "{}\n\n\
+        [TOOL EFFICIENCY]\n\
+        If you need to call multiple tools and there are no dependencies between them, \
+        call all independent tools in a single response. For example, read multiple files \
+        at once, or run a command while writing a file. Never use placeholders — only call \
+        tools when you have all required parameters.\n\n\
+        [MEMORY]\n{}\n{}",
+        soul, memory.content, project_context
     );
 
+    // --- Git checkpoint ---
+    // Record the current HEAD so changes can be rolled back if needed.
+    let _checkpoint_hash = tokio::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&cfg.working_directory)
+        .output().await
+        .ok()
+        .and_then(|o| if o.status.success() { String::from_utf8(o.stdout).ok() } else { None })
+        .map(|s| s.trim().to_string());
+
     // --- Compaction check ---
+    // Trigger compaction at cfg.compaction_threshold % of the token limit.
+    // Lower threshold = compact sooner = smaller, stabler prefix = better caching.
+    // Higher threshold = more context retained but larger prefix before cache kicks in.
     let token_est = estimate_tokens(history);
     let mut did_compact = false;
-    let mut api_msgs: Vec<serde_json::Value> = if token_est > cfg.token_limit && history.len() > 3 {
-        info!(tokens = token_est, limit = cfg.token_limit, "Compacting conversation history");
-        let split = history.len() - 3;
+    let pct = cfg.compaction_threshold.clamp(10, 100);
+    let compact_threshold = cfg.token_limit * pct / 100;
+    let mut api_msgs: Vec<serde_json::Value> = if token_est > compact_threshold && history.len() > 4 {
+        info!(tokens = token_est, threshold = compact_threshold, limit = cfg.token_limit, pct, "Compacting conversation history");
+        // Target: keep enough recent messages to stay at (pct - 20)% of the limit,
+        // leaving headroom for the tool loop to grow within cache.
+        let target_pct = pct.saturating_sub(20).max(10);
+        let avg_tokens_per_msg = token_est / history.len();
+        let target_recent_tokens = cfg.token_limit * target_pct / 100;
+        let keep = if avg_tokens_per_msg > 0 {
+            (target_recent_tokens / avg_tokens_per_msg).max(3)
+        } else {
+            3
+        };
+        let split = history.len().saturating_sub(keep);
 
         // Clone before mutation to avoid borrow conflicts
         let old = history[..split].to_vec();
@@ -490,6 +628,14 @@ pub async fn run_agent_turn(
             .collect()
     };
 
+    // Inject active tasks at the front of api_msgs as a volatile user/assistant pair.
+    // Keeping tasks out of the system prompt means the stable memory+project cache block
+    // (1h TTL) won't be busted every time a task is created, updated, or completed.
+    if !tasks_summary.is_empty() {
+        api_msgs.insert(0, serde_json::json!({"role": "assistant", "content": "Noted."}));
+        api_msgs.insert(0, serde_json::json!({"role": "user", "content": tasks_summary}));
+    }
+
     // Token budget warning: if approaching the limit but not yet compacted,
     // hint the model to be concise.
     let system = if token_est > cfg.token_limit * 80 / 100 && token_est <= cfg.token_limit {
@@ -510,17 +656,37 @@ pub async fn run_agent_turn(
     let mut last_model_used = sonnet.model_name().to_string();
     const MAX_NUDGES: usize = 2;
 
-    // Build an optional cheaper continuation client (used after tool results)
+    // Build an optional cheaper continuation client (used after tool results).
+    // Match the primary model's max_tokens to avoid unnecessary truncation that would
+    // force a fallback to the expensive primary model via max_tokens nudges.
     let continuation_client: Option<SonnetClient> =
         if !cfg.continuation_model.is_empty() && cfg.continuation_model != cfg.primary_model {
             Some(SonnetClient::new(
                 &cfg.anthropic_key, &cfg.openai_key,
                 &cfg.continuation_model, &cfg.continuation_provider,
-                4096, Arc::clone(&cfg.http),
+                sonnet.max_tokens(), Arc::clone(&cfg.http),
             ))
         } else {
             None
         };
+
+    // Build an optional fallback client (used when primary fails after max_retries).
+    let fallback_client: Option<SonnetClient> =
+        if !cfg.fallback_model.is_empty() && cfg.fallback_model != cfg.primary_model {
+            Some(SonnetClient::new(
+                &cfg.anthropic_key, &cfg.openai_key,
+                &cfg.fallback_model, &cfg.fallback_provider,
+                sonnet.max_tokens(), Arc::clone(&cfg.http),
+            ))
+        } else {
+            None
+        };
+    let mut tried_fallback = false;
+    let mut using_fallback = false;
+
+    // Rate-limit cooldown: track when models are rate-limited to avoid wasting retries.
+    // Key = model name, value = expiry instant.
+    let mut cooldowns: std::collections::HashMap<String, std::time::Instant> = std::collections::HashMap::new();
 
     // Extract original user request for heartbeat checks
     let user_request = history.last()
@@ -559,7 +725,9 @@ pub async fn run_agent_turn(
             }
         });
 
-        let active_sonnet = if last_was_tool {
+        let active_sonnet = if using_fallback {
+            fallback_client.as_ref().unwrap_or(sonnet)
+        } else if last_was_tool {
             continuation_client.as_ref().unwrap_or(sonnet)
         } else {
             sonnet
@@ -567,7 +735,23 @@ pub async fn run_agent_turn(
         last_was_tool = false; // reset; set again if this turn ends in tool_use
         last_model_used = active_sonnet.model_name().to_string();
 
-        let response = match active_sonnet.call_streaming(&system, &api_msgs, &delta_tx, force_tool_next).await {
+        // Check rate-limit cooldown for the active model
+        if let Some(expires) = cooldowns.get(&last_model_used) {
+            if std::time::Instant::now() < *expires {
+                // Model is still rate-limited — try fallback if we haven't already
+                if !using_fallback && fallback_client.is_some() && !tried_fallback {
+                    warn!(model = %last_model_used, "Model still in cooldown, switching to fallback");
+                    using_fallback = true;
+                    tried_fallback = true;
+                    continue;
+                }
+                // No fallback available — just wait out the cooldown
+                let remaining = expires.duration_since(std::time::Instant::now());
+                tokio::time::sleep(remaining).await;
+            }
+        }
+
+        let response = match active_sonnet.call_streaming(&system, &mut api_msgs, &delta_tx, force_tool_next, &cfg.thinking_effort, &cfg.mode).await {
             Ok(r) => {
                 consecutive_errors = 0;
                 force_tool_next = false;
@@ -587,7 +771,19 @@ pub async fn run_agent_turn(
                     }
                     Some(429) | Some(529) => {
                         let wait = parse_retry_after(&e.to_string()).unwrap_or(20);
-                        warn!(wait, "Rate limited — backing off");
+                        warn!(wait, model = %last_model_used, "Rate limited — backing off");
+                        // Record cooldown for this model
+                        cooldowns.insert(
+                            last_model_used.clone(),
+                            std::time::Instant::now() + std::time::Duration::from_secs(60),
+                        );
+                        // Try fallback model instead of waiting
+                        if !using_fallback && fallback_client.is_some() && !tried_fallback {
+                            warn!("Switching to fallback model due to rate limit");
+                            using_fallback = true;
+                            tried_fallback = true;
+                            continue;
+                        }
                         let _ = tx.send(AgentEvent::ToolOutput {
                             name: "system".into(),
                             stdout: format!("Rate limited — retrying in {}s...", wait),
@@ -603,6 +799,20 @@ pub async fn run_agent_turn(
                         consecutive_errors += 1;
                         error!(error = %e, attempt = consecutive_errors, "API call failed");
                         if consecutive_errors > cfg.max_retries {
+                            // Try fallback model before giving up entirely
+                            if !tried_fallback && fallback_client.is_some() {
+                                warn!(model = %last_model_used, "Primary model exhausted retries, switching to fallback");
+                                tried_fallback = true;
+                                using_fallback = true;
+                                consecutive_errors = 0;
+                                let _ = tx.send(AgentEvent::ToolOutput {
+                                    name: "system".into(),
+                                    stdout: format!("Primary model failed — switching to fallback model..."),
+                                    stderr: String::new(),
+                                    code: 0,
+                                });
+                                continue;
+                            }
                             let _ = tx.send(AgentEvent::Error(format!("API failed after {} retries: {}", cfg.max_retries, e)));
                             break;
                         }
@@ -617,6 +827,29 @@ pub async fn run_agent_turn(
             .as_str()
             .unwrap_or("end_turn")
             .to_string();
+
+        // Log token usage from the API response
+        if let Some(u) = response.get("usage") {
+            let input = u["input_tokens"].as_u64().unwrap_or(0);
+            let output = u["output_tokens"].as_u64().unwrap_or(0);
+            let cache_create = u["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+            let cache_read = u["cache_read_input_tokens"].as_u64().unwrap_or(0);
+            info!(
+                input_tokens = input,
+                output_tokens = output,
+                cache_create_tokens = cache_create,
+                cache_read_tokens = cache_read,
+                iteration = iterations,
+                model = %last_model_used,
+                "API token usage"
+            );
+            let _ = tx.send(AgentEvent::TokenUsage {
+                input, output,
+                cache_read,
+                cache_write: cache_create,
+                model: last_model_used.clone(),
+            });
+        }
 
         let content = response["content"]
             .as_array()
@@ -682,12 +915,20 @@ pub async fn run_agent_turn(
             let visible_text = strip_think_tags(&final_text);
             let visible_len = visible_text.trim().len();
 
-            const HEARTBEAT_TOOL_THRESHOLD: usize = 2;
+            const HEARTBEAT_TOOL_THRESHOLD: usize = 3;
             const SUBSTANTIAL_RESPONSE: usize = 200;
+            // Skip heartbeat if the last tool was a terminal action (clearly did something)
+            let last_tool_is_terminal = tool_log.last()
+                .map(|l| l.contains("write_file") || l.contains("send_email")
+                    || l.contains("send_file") || l.contains("patch_file")
+                    || (l.contains("git_command") && l.contains("commit")))
+                .unwrap_or(false);
             let is_complete = if !any_tools_called {
                 true
             } else if tool_log.len() < HEARTBEAT_TOOL_THRESHOLD {
                 true // short chain — skip expensive heartbeat
+            } else if last_tool_is_terminal {
+                true // last action was clearly a terminal write/send
             } else if visible_len >= SUBSTANTIAL_RESPONSE {
                 true // agent already wrote a real answer — don't nuke it
             } else if nudge_count >= MAX_NUDGES || iterations >= cfg.max_tool_iterations {
@@ -892,9 +1133,10 @@ pub async fn run_agent_turn(
         for (tool_id, tool_name, input) in subagent_calls {
             let result = if tool_name == "run_subagent" {
                 let task = input["task"].as_str().unwrap_or("").to_string();
+                let model_pref = input["model"].as_str().unwrap_or("fast").to_string();
                 match tokio::time::timeout(
                     std::time::Duration::from_secs(300),
-                    run_subagent_task(&task, cfg, task_db, tx),
+                    run_subagent_task(&task, &model_pref, cfg, task_db, tx),
                 ).await {
                     Ok(r) => r,
                     Err(_) => "Error: subagent timed out after 5 minutes.".to_string(),
@@ -915,6 +1157,9 @@ pub async fn run_agent_turn(
                     }
                 }
             };
+            // Apply the same truncation that execute_tool applies to spawned tools,
+            // so inline tools (subagent, ask_user) don't inject unbounded text.
+            let result = truncate_str(&result, cfg.max_output_chars);
             let truncated = if result.len() > 200 {
                 let mut b = 200; while b > 0 && !result.is_char_boundary(b) { b -= 1; }
                 format!("{}...", &result[..b])
@@ -1297,7 +1542,12 @@ async fn execute_tool(
                         stderr: display_stderr.clone(),
                         code,
                     });
-                    format!("exit code: {}\nstdout:\n{}\nstderr:\n{}", code, display_stdout, display_stderr)
+                    format!(
+                        "exit code: {}\nstdout:\n{}{}",
+                        code,
+                        display_stdout,
+                        if display_stderr.is_empty() { String::new() } else { format!("\nstderr:\n{}", display_stderr) }
+                    )
                 }
                 Err(e) => format!("Error: {}", e),
             }
@@ -1521,7 +1771,11 @@ async fn execute_tool(
                         stderr: truncate_str(&stderr, 1000),
                         code,
                     });
-                    format!("exit: {}\n{}{}", code, stdout, stderr)
+                    if stderr.trim().is_empty() {
+                        format!("exit: {}\n{}", code, stdout)
+                    } else {
+                        format!("exit: {}\nstdout:\n{}\nstderr:\n{}", code, stdout, stderr)
+                    }
                 }
                 Err(e) => format!("Git error: {}", e),
             }
@@ -1652,6 +1906,52 @@ async fn execute_tool(
                 Ok(_) => format!("Project knowledge saved to {}", knowledge_path.display()),
                 Err(e) => format!("Error writing project knowledge: {}", e),
             }
+        }
+        "search_history" => {
+            let query = input["query"].as_str().unwrap_or("").trim().to_string();
+            if query.is_empty() {
+                return Ok(("Error: query is required.".to_string(), None));
+            }
+            let limit = input["limit"].as_u64().unwrap_or(10).min(30) as usize;
+            match cfg.chat_db.search_history(&query, limit) {
+                Ok(results) if results.is_empty() => {
+                    format!("No history found matching '{}'.", query)
+                }
+                Ok(results) => {
+                    let mut out = format!("Found {} result(s) for '{}':\n\n", results.len(), query);
+                    for r in &results {
+                        let preview = if r.content.len() > 300 {
+                            let mut b = 300;
+                            while b > 0 && !r.content.is_char_boundary(b) { b -= 1; }
+                            format!("{}…", &r.content[..b])
+                        } else {
+                            r.content.clone()
+                        };
+                        out.push_str(&format!("[{}] [{}]\n{}\n\n", r.session_id, r.role, preview));
+                    }
+                    out
+                }
+                Err(e) => format!("History search error: {}", e),
+            }
+        }
+        "update_user_model" => {
+            let observation = input["observation"].as_str().unwrap_or("").trim().to_string();
+            if observation.is_empty() {
+                return Ok(("Error: observation is required.".to_string(), None));
+            }
+            let op = MemoryOp {
+                action: "append".to_string(),
+                section: "User Model".to_string(),
+                content: observation.clone(),
+            };
+            let _ = tx.send(AgentEvent::MemoryUpdate {
+                section: "User Model".to_string(),
+                content: observation,
+            });
+            return Ok((
+                truncate_str("User model updated.", max_output_chars),
+                Some(op),
+            ));
         }
         "set_autonomous" => {
             let enabled = input["enabled"].as_bool().unwrap_or(false);
@@ -1880,6 +2180,26 @@ async fn execute_tool(
                 Err(e) => format!("Error spawning background process: {}", e),
             }
         }
+        "rollback_changes" => {
+            let reason = input["reason"].as_str().unwrap_or("no reason given");
+            info!(reason, "Rollback requested by agent");
+            // Discard all uncommitted changes (tracked files)
+            let checkout = tokio::process::Command::new("git")
+                .args(["checkout", "--", "."])
+                .current_dir(&work_dir)
+                .output().await;
+            // Remove untracked files created by the agent
+            let clean = tokio::process::Command::new("git")
+                .args(["clean", "-fd"])
+                .current_dir(&work_dir)
+                .output().await;
+            match (checkout, clean) {
+                (Ok(co), Ok(cl)) if co.status.success() && cl.status.success() => {
+                    format!("Rolled back all uncommitted changes. Reason: {}", reason)
+                }
+                _ => "Rollback attempted but git commands had issues. Check working directory state.".to_string(),
+            }
+        }
         _ => format!("Unknown tool: {}", tool_name),
     };
 
@@ -1891,6 +2211,7 @@ async fn execute_tool(
 /// Returns the subagent's final text output. Uses Box::pin to break the recursive type cycle.
 fn run_subagent_task<'a>(
     task: &'a str,
+    model_pref: &'a str,
     cfg: &'a TurnConfig,
     task_db: &'a Arc<TaskDb>,
     tx: &'a mpsc::UnboundedSender<AgentEvent>,
@@ -1903,10 +2224,20 @@ fn run_subagent_task<'a>(
         return "Error: 'task' parameter is required.".to_string();
     }
 
+    // Resolve model: "fast" uses continuation model (cheaper), "primary" uses the main model.
+    let (sub_model, sub_provider) = if model_pref == "primary"
+        || cfg.continuation_model.is_empty()
+        || cfg.continuation_model == cfg.primary_model
+    {
+        (cfg.primary_model.clone(), cfg.primary_provider.clone())
+    } else {
+        (cfg.continuation_model.clone(), cfg.continuation_provider.clone())
+    };
+
     let sub_sonnet = super::sonnet::SonnetClient::new(
         &cfg.anthropic_key, &cfg.openai_key,
-        &cfg.primary_model, &cfg.primary_provider,
-        4096, Arc::clone(&cfg.http),
+        &sub_model, &sub_provider,
+        8192, Arc::clone(&cfg.http),
     );
     let sub_classifier = super::classifier::Classifier::new(
         &cfg.anthropic_key, &cfg.openai_key,
@@ -1928,6 +2259,7 @@ fn run_subagent_task<'a>(
     let mut sub_cfg = cfg.clone();
     sub_cfg.subagent_depth = cfg.subagent_depth + 1;
     sub_cfg.conversation_logging = false;
+    sub_cfg.conv_logger = None;
 
     let (sub_tx, sub_rx) = mpsc::unbounded_channel::<AgentEvent>();
     let sub_soul = "You are a focused sub-agent. Complete the task you are given efficiently and return the result. Do not ask clarifying questions.";
@@ -2126,9 +2458,17 @@ fn log_turn(
     reply: &str,
 ) {
     use std::io::Write;
+    let entry = format_log_entry(user_msg, enhanced_msg, model, reply);
+    match std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
+        Ok(mut f) => { let _ = f.write_all(entry.as_bytes()); }
+        Err(e) => warn!(error = %e, path = %log_path.display(), "Failed to write conversation log"),
+    }
+}
+
+/// Format a conversation turn as a log entry string (no I/O).
+fn format_log_entry(user_msg: &str, enhanced_msg: Option<&str>, model: &str, reply: &str) -> String {
     let ts = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let separator = "═".repeat(80);
-
     let mut entry = String::new();
     entry.push_str(&format!("\n{separator}\n"));
     entry.push_str(&format!("[{ts}] USER\n{user_msg}\n"));
@@ -2136,10 +2476,33 @@ fn log_turn(
         entry.push_str(&format!("\n[{ts}] SUPERCHARGED\n{enh}\n"));
     }
     entry.push_str(&format!("\n[{ts}] ASSISTANT [{model}]\n{reply}\n"));
+    entry
+}
 
-    match std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
-        Ok(mut f) => { let _ = f.write_all(entry.as_bytes()); }
-        Err(e) => warn!(error = %e, path = %log_path.display(), "Failed to write conversation log"),
+/// Number of buffered log entries that triggers an immediate background flush.
+const LOG_FLUSH_THRESHOLD: usize = 100;
+
+/// Record a conversation turn to the log — either buffered (if `cfg.conv_logger` is set)
+/// or written synchronously to disk as a fallback.
+async fn record_conv_turn(
+    cfg: &TurnConfig,
+    log_path: &std::path::Path,
+    user_msg: &str,
+    enhanced_msg: Option<&str>,
+    model: &str,
+    reply: &str,
+) {
+    match &cfg.conv_logger {
+        Some(logger) => {
+            let entry = format_log_entry(user_msg, enhanced_msg, model, reply);
+            let needs_flush = {
+                let mut g = logger.buffer.lock().await;
+                g.push(entry);
+                g.len() >= LOG_FLUSH_THRESHOLD
+            };
+            if needs_flush { logger.notify.notify_one(); }
+        }
+        None => log_turn(log_path, user_msg, enhanced_msg, model, reply),
     }
 }
 

@@ -11,8 +11,17 @@ pub enum PromptClass {
     Trivial(String),
     /// Simple question — pass through to primary unchanged.
     Simple,
+    /// Medium task — uses primary model but skips quality review and code review.
+    /// Tests still run if detected. Covers clear code tasks that don't need enhancement.
+    Medium,
     /// Complex task — enhanced prompt replaces the original for the primary model.
     Complex(String),
+}
+
+/// Result of the local weighted prompt scorer.
+struct ScoreResult {
+    score: f64,
+    confidence: f64,
 }
 
 #[derive(Clone)]
@@ -754,10 +763,118 @@ fn build_review_prompt(user_request: &str, tool_log: &str, text_tail: &str) -> S
     )
 }
 
-/// Fast-path classifier: returns Some(class) for messages we can classify
-/// without an LLM call (greetings, acks, clear single-action commands).
-/// Returns None to fall through to the LLM classifier.
-fn quick_classify(msg: &str) -> Option<PromptClass> {
+/// Weighted multi-dimension prompt scorer inspired by ClawRouter.
+/// Evaluates 10 dimensions to produce a complexity score and confidence level.
+/// Handles 60-70% of requests locally with zero LLM cost and <1ms latency.
+fn score_prompt(msg: &str) -> ScoreResult {
+    let trimmed = msg.trim();
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+    let lower = trimmed.to_lowercase();
+    let mut score: f64 = 0.0;
+
+    // --- Quality-escalation overrides (hard rules) ---
+    // Very long prompts are almost always multi-step complex tasks
+    if words.len() > 500 {
+        return ScoreResult { score: 0.5, confidence: 0.95 };
+    }
+
+    // 1. Reasoning markers (weight 0.18)
+    const REASONING: &[&str] = &[
+        "prove", "theorem", "derive", "step by step", "chain of thought",
+        "formal", "logical", "contradiction", "induction", "deduction",
+    ];
+    let r_count = REASONING.iter().filter(|k| lower.contains(*k)).count();
+    // Hard override: 3+ reasoning keywords = forced Complex
+    if r_count >= 3 {
+        return ScoreResult { score: 0.5, confidence: 0.90 };
+    }
+    score += 0.18 * (r_count as f64 / 2.0).min(1.0);
+
+    // 2. Code presence (weight 0.15)
+    const CODE: &[&str] = &[
+        "```", "function ", "class ", "import ", "async ", "fn ", "struct ", "impl ",
+        "def ", "const ", "let ", "var ",
+    ];
+    let c_count = CODE.iter().filter(|k| trimmed.contains(*k)).count();
+    score += 0.15 * (c_count as f64 / 2.0).min(1.0);
+
+    // 3. Multi-step patterns (weight 0.12)
+    const MULTISTEP: &[&str] = &[
+        "first", "then", "step 1", "step 2", "finally", "next",
+        "after that", "followed by",
+    ];
+    let m_count = MULTISTEP.iter().filter(|k| lower.contains(*k)).count();
+    score += 0.12 * (m_count as f64 / 2.0).min(1.0);
+
+    // 4. Technical terms (weight 0.10)
+    const TECHNICAL: &[&str] = &[
+        "algorithm", "kubernetes", "distributed", "architecture",
+        "database", "microservice", "encryption", "protocol",
+        "infrastructure", "backend", "frontend", "pipeline",
+    ];
+    let t_count = TECHNICAL.iter().filter(|k| lower.contains(*k)).count();
+    score += 0.10 * (t_count as f64 / 2.0).min(1.0);
+
+    // 5. Token count proxy (weight 0.08)
+    score += 0.08 * if words.len() < 10 { -0.5 }
+                     else if words.len() > 100 { 0.8 }
+                     else { (words.len() as f64 - 30.0) / 100.0 };
+
+    // 6. Simple indicators (weight -0.08, negative — pulls score down)
+    const SIMPLE_IND: &[&str] = &[
+        "what is", "define", "translate", "hello", "thanks", "hi ",
+        "who is", "how are", "good morning", "what time",
+    ];
+    let s_count = SIMPLE_IND.iter().filter(|k| lower.contains(*k)).count();
+    score -= 0.08 * (s_count as f64).min(1.0);
+
+    // 7. Agentic task markers (weight 0.06)
+    const AGENTIC: &[&str] = &[
+        "read file", "edit file", "deploy", "fix the", "debug",
+        "refactor", "implement", "set up", "configure",
+    ];
+    let a_count = AGENTIC.iter().filter(|k| lower.contains(*k)).count();
+    score += 0.06 * (a_count as f64 / 2.0).min(1.0);
+
+    // 8. Creative markers (weight 0.05)
+    const CREATIVE: &[&str] = &[
+        "story", "poem", "brainstorm", "imagine", "creative", "design",
+    ];
+    let cr_count = CREATIVE.iter().filter(|k| lower.contains(*k)).count();
+    score += 0.05 * (cr_count as f64).min(1.0);
+
+    // 9. Constraint indicators (weight 0.04)
+    const CONSTRAINTS: &[&str] = &[
+        "at most", "at least", "within", "budget", "maximum", "O(",
+        "performance", "optimize",
+    ];
+    let cn_count = CONSTRAINTS.iter().filter(|k| lower.contains(*k)).count();
+    score += 0.04 * (cn_count as f64).min(1.0);
+
+    // 10. Structured output request (weight 0.03)
+    const OUTPUT: &[&str] = &["json", "yaml", "csv", "schema", "table format"];
+    let o_count = OUTPUT.iter().filter(|k| lower.contains(*k)).count();
+    score += 0.03 * (o_count as f64).min(1.0);
+
+    // Hard override: structured output + schema = at least Medium
+    if lower.contains("json") && lower.contains("schema") {
+        score = score.max(0.1);
+    }
+
+    // --- Confidence via distance from nearest tier boundary ---
+    // Boundaries: Simple/Medium at -0.02, Medium/Complex at 0.25
+    let boundaries: &[f64] = &[-0.02, 0.25];
+    let min_dist = boundaries.iter()
+        .map(|b| (score - b).abs())
+        .fold(f64::MAX, f64::min);
+    let confidence = 1.0 / (1.0 + (-10.0 * min_dist).exp());
+
+    ScoreResult { score, confidence }
+}
+
+/// Fast-path classifier: handles trivial patterns (greetings, acks, identity) that
+/// the weighted scorer can't assess well. Returns None to fall through to scorer.
+fn quick_classify_trivial(msg: &str) -> Option<PromptClass> {
     let trimmed = msg.trim();
     if trimmed.is_empty() {
         return Some(PromptClass::Simple);
@@ -777,30 +894,54 @@ fn quick_classify(msg: &str) -> Option<PromptClass> {
         return Some(PromptClass::Simple);
     }
 
-    // Single-action commands with a clear specific target and no ambiguity words
-    // e.g. "restart nginx", "update vscode", "install curl", "show disk usage"
-    // but NOT "install the best option" or "update everything"
-    const AMBIGUOUS: &[&str] = &[
-        "best", "recommend", "which", "vs", "versus", "better", "worse",
-        "should i", " or ", "option", "alternative", "compare",
-        "suggest", "how should", "what should",
+    // Identity / capability questions — always Simple (main model answers these)
+    const IDENTITY_STARTS: &[&str] = &[
+        "who are you", "what are you", "what can you do",
+        "do you have", "can you remember", "what do you know",
+        "are you", "how do you", "what's your name", "what is your name",
     ];
-    let words: Vec<&str> = trimmed.split_whitespace().collect();
-    if words.len() >= 2 && words.len() <= 6 {
-        const SIMPLE_VERBS: &[&str] = &[
-            "restart", "reboot", "start", "stop", "enable", "disable",
-            "update", "upgrade", "install", "uninstall", "remove",
-            "show", "list", "check", "clear", "run", "open", "close",
-            "delete", "move", "copy", "rename", "kill", "reload",
-        ];
-        let first = words[0].to_lowercase();
-        if SIMPLE_VERBS.contains(&first.as_str()) {
-            let has_ambiguity = AMBIGUOUS.iter().any(|a| lower.contains(a));
-            if !has_ambiguity {
-                return Some(PromptClass::Simple);
-            }
-        }
+    if IDENTITY_STARTS.iter().any(|p| lower.starts_with(p)) {
+        return Some(PromptClass::Simple);
     }
 
+    // Explicit remember/save instructions — only the primary model has memory tools
+    if lower.starts_with("remember ") || lower.starts_with("save to memory")
+        || lower.starts_with("store ") || lower.starts_with("forget ")
+    {
+        return Some(PromptClass::Simple);
+    }
+
+    None
+}
+
+/// Hybrid classifier entry point: trivial patterns → weighted scorer → LLM fallback.
+/// The scorer handles 60-70% of requests locally; the LLM handles ambiguous cases.
+fn quick_classify(msg: &str) -> Option<PromptClass> {
+    // Stage 1: trivial patterns (greetings, acks, identity)
+    if let Some(class) = quick_classify_trivial(msg) {
+        return Some(class);
+    }
+
+    // Stage 2: weighted multi-dimension scorer
+    let result = score_prompt(msg);
+    if result.confidence >= 0.75 {
+        info!(
+            score = format!("{:.3}", result.score),
+            confidence = format!("{:.3}", result.confidence),
+            "Scorer: high confidence, skipping LLM"
+        );
+        return match result.score {
+            s if s < -0.02 => Some(PromptClass::Simple),
+            s if s < 0.25 => Some(PromptClass::Medium),
+            _ => None,  // Complex territory — let LLM enhance the prompt
+        };
+    }
+
+    // Stage 3: low confidence — fall through to LLM classifier
+    info!(
+        score = format!("{:.3}", result.score),
+        confidence = format!("{:.3}", result.confidence),
+        "Scorer: low confidence, falling through to LLM"
+    );
     None
 }

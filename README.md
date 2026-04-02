@@ -1,300 +1,338 @@
-# Axium — Autonomous Linux Assistant
+# Axium
 
-A local-first autonomous AI assistant built in Rust. Runs entirely on your machine at `http://127.0.0.1:3000`. No cloud state, no external databases, no phone-home. Just a fast WebSocket-based chat UI connected to a tool-wielding agent with full system access.
-
-## Install
+> **Self-hosted autonomous AI agent. Built in Rust. Runs on your Linux machine — including a Raspberry Pi.**
+> Persistent memory · Background task queue · Multi-model cost routing · 31 parallel tools · Telegram channel · Plugin system
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/Broikos-Nikos/axium/main/install.sh)
 ```
 
-That's it. The script checks for `git`, installs it if missing, clones the repo, and runs `setup.sh`.
+Opens at `http://127.0.0.1:3000`. No account. No telemetry. Your data stays on your disk.
 
 ---
 
-## What it does
+## What Axium does
 
-Axium is a coding and system automation assistant that lives on your Linux machine and can:
+Axium is an **open-source, self-hosted autonomous AI agent** for Linux. Give it a goal — coding, research, system administration, web automation, email, monitoring — and it executes. It uses Claude Sonnet (or any Anthropic/OpenAI model) as its reasoning core and gives it full access to your machine: shell, files, git, web, email, and a 31-tool suite that runs in parallel.
 
-- Execute shell commands, run builds, manage git
-- Read, write, patch, and search files
-- Browse URLs, fetch documentation
-- Run tasks in the background with Telegram notifications
-- Maintain persistent memory and project knowledge across sessions
-- Review its own code changes after each turn
-- Understand your Rust project structure via `rust-analyzer` integration
+It is not a chat assistant. It is not a CLI wrapper. It is not a one-shot code generator. It is a **persistent agent** with its own memory, background worker, and cost architecture — designed for serious daily use beyond the IDE.
+
+### Coding tasks
+
+```
+You: refactor the auth module to use JWT, run tests, commit when clean
+```
+
+Axium will:
+1. Read the relevant files
+2. Classify complexity — inject expert task framing for hard problems
+3. Rewrite the code (`patch_file` / `write_file`)
+4. Run `cargo test` (or whatever your stack uses)
+5. Auto-repair failures — up to 2 fix attempts with self-reflection
+6. Run a silent code review via a secondary model on the diff
+7. Commit with `git_command`
+8. Tell you it's done — or send a Telegram message if you queued it and walked away
+
+### Beyond coding
+
+Axium handles any goal you can express as a task:
+
+- **Research**: browse documentation, aggregate information, write a summary to a file
+- **System administration**: audit packages, monitor logs, run diagnostics, clean up disk space
+- **Web automation**: scrape pages, submit forms, extract structured data
+- **Communication**: draft and send email, notify via Telegram with results attached
+- **Monitoring**: background worker runs scheduled tasks while you're offline — audit the codebase, ping you on Telegram when done
+- **Cross-session recall**: "what did we decide about the database schema last month?" — FTS5 full-text search over all past conversations, not a hallucination
+
+No copy-pasting. No context-switching. No babysitting.
 
 ---
 
-## Requirements
+## Why it beats the best agentic tools
 
-- **Rust** (stable, 2021 edition)
-- **`rust-analyzer`** CLI — for symbol extraction and AST-aware rename
-  ```bash
-  rustup component add rust-analyzer
-  ```
-- **Anthropic API key** — Claude Sonnet (primary model)
-- **OpenAI API key** — optional, for classifier/review models (GPT-4.1-mini)
+The leading agentic tools — terminal-based coding agents, IDE-integrated assistants — are genuinely excellent. They reason deeply, edit code accurately, and handle complex multi-step tasks. If IDE integration or a managed cloud experience is your priority, they may be the better fit.
+
+Where they stop is where Axium starts.
+
+| Capability | Axium | Best-in-class alternatives |
+|---|---|---|
+| Shell commands, file ops, git, web fetch | ✅ | ✅ |
+| Extended / adaptive reasoning (Claude) | ✅ | ✅ |
+| Project-scoped memory files (e.g. `CLAUDE.md`) | ✅ `.axium/knowledge.md` | ✅ |
+| **User-level cross-session personal memory** | ✅ survives new projects & sessions | ⚠ project-scoped only |
+| **Behavioral user model** — infers preferences without prompting | ✅ | ❌ |
+| **Cross-session full-text history search** (SQLite FTS5) | ✅ | ❌ |
+| **Background task queue — runs while you're offline** | ✅ Telegram notification on done | ❌ |
+| **Non-coding tasks** — research, email, system ops, monitoring | ✅ | ⚠ coding-focused |
+| **Multi-model routing** — 6 slots, 2 providers, per-slot config | ✅ | ❌ single model |
+| **Auto-fallback** on rate limit or outage | ✅ | ❌ |
+| Continuation model for tool-loop turns (cheaper) | ✅ | ❌ |
+| Tool subsetting — simple mode sends 18/31 tools to API | ✅ saves ~4,300 tokens/call | ❌ |
+| Application-level prompt caching (1h TTL, 3 breakpoints) | ✅ | ❌ |
+| Local classifier — conversational turns skip LLM entirely | ✅ ~<1ms, zero cost | ❌ |
+| Post-turn code review by a dedicated secondary model | ✅ automatic | ❌ |
+| Plugin system — 8 lifecycle hooks, language-agnostic | ✅ | ❌ |
+| Injectable domain skills per task type | ✅ `axium-skills/` | ❌ |
+| Telegram channel with full agent access | ✅ | ❌ |
+| Runs on a Raspberry Pi Zero 2 W or equivalent ARM SBC | ✅ | ❌ Python-based |
+| IDE integration | ❌ browser UI only | ✅ |
+
+The last two rows in the left column are intentional. Axium is a compiled Rust binary — it runs anywhere Linux runs, including constrained hardware. If IDE integration matters, it is not the right tool. Everything else in the table is real, verifiable, and in the source code.
+
+---
+
+## Memory that actually persists
+
+The leading tools offer project-scoped memory files — you write conventions, the agent reads them per-project. That's useful. Axium goes further:
+
+- **User memory** (`memory.md`) — facts, preferences, recurring context. Survives restarts, survives new projects. Plain markdown — you can read and edit it directly.
+- **User model** — inferred behavioral profile written proactively by the agent after sessions: communication style, expertise level, recurring patterns. No prompting required.
+- **Project knowledge** (`.axium/knowledge.md`) — per-project notes and conventions, written and updated by the agent as it learns your stack.
+- **Conversation history** — all sessions stored in SQLite with FTS5 full-text search. Ask *"what did we decide about the auth architecture last month?"* and surface real past context, not a guess.
+
+---
+
+## 31 tools. Parallel execution.
+
+Every tool call in a turn runs concurrently via Tokio. Reading 5 files, running diagnostics, and checking git status happen simultaneously — not sequentially.
+
+| Category | Tools |
+|---|---|
+| Shell | `run_command`, `spawn_background` |
+| Files | `read_file`, `write_file`, `append_file`, `patch_file`, `delete_file`, `move_file` |
+| Search | `search_files`, `list_directory`, `scan_project`, `search_history` |
+| Code intelligence | `find_references`, `rename_symbol`, `get_dependency_graph`, `get_diagnostics` |
+| Web | `browse_url`, `web_search` |
+| Git | `git_command` |
+| Agent | `run_subagent`, `set_autonomous`, `queue_task`, `plan_file_changes` |
+| Memory | `update_memory`, `update_user_model`, `update_project_knowledge` |
+| Communication | `send_email`, `send_file`, `ask_user` |
+| Tasks | `task_manage` |
+
+`scan_project` extracts symbols from source files via `rust-analyzer` and injects a live architecture map into the system prompt every turn — the agent understands your project structure without exploring files first.
+
+`rename_symbol` uses AST-aware replacement: dead zones (comments, string literals) are identified and skipped so renames don't corrupt non-code content.
+
+---
+
+## Background task queue
+
+Queue a task, disconnect, come back to results.
+
+```
+You:  audit the codebase for SQL injection and write a report. Ping me when done.
+[disconnect]
+
+[Telegram, 25 minutes later]:
+Axium: Done. Found 2 potential issues in db/queries.py. Report at /home/you/audit.md
+```
+
+The worker polls every 4 seconds, runs a full agent turn with the same tools and memory, verifies the result was actual work (not just a description of work — it checks for tool usage evidence), and retries failed tasks with the failure context injected.
+
+---
+
+## The cost architecture
+
+Most agentic tools send every message to the most expensive model. Axium routes intelligently.
+
+```
+Request arrives
+    │
+    ├─ Quick pattern match (<1ms, zero LLM cost)
+    │   greetings, acks, identity questions
+    │
+    ├─ Local 10-dimension weighted scorer (<1ms, zero LLM cost)
+    │   classifies clear simple/medium requests without any API call
+    │
+    ├─ Cheap classifier model (e.g. gpt-4.1-nano, fractions of a cent)
+    │   for genuinely ambiguous cases only
+    │
+    └─ Primary model (Claude Sonnet / GPT-4)
+        reserved for complex tasks that need it
+```
+
+In conversational and simple-request usage, the local scorer alone handles a significant portion of turns at zero LLM cost. The exact split depends on your usage pattern — heavy coding sessions lean primary-model; mixed chat sessions see more local routing.
+
+Additionally:
+
+- **Prompt caching** — 1-hour TTL cache breakpoints on tool definitions, soul, and conversation prefix. Within an active session, repeated prefixes see up to ~90% reduction in billable input tokens (Anthropic's published cache pricing).
+- **Tool subsetting** — Simple mode sends 18 tool definitions instead of 31, saving ~4,300 tokens per call while keeping all tools needed for lightweight tasks.
+- **Continuation model** — Follow-up turns after tool calls use a cheaper model, reserving the primary for first-contact reasoning.
+- **Compaction** — At 60% of your token limit, old history is summarized by the compactor model. The summary costs a fraction of the replaced tokens.
+- **Conversation recovery** — Every N turns, a cheap model cleans correction/retry noise from history, preventing waste from accumulated failed attempts.
+
+---
+
+## 6 model slots, 2 providers
+
+```json
+{
+  "models": {
+    "primary":      "claude-sonnet-4-6",   // complex reasoning — used selectively
+    "continuation": "claude-haiku-4-5",    // tool-loop follow-ups — cheaper
+    "classifier":   "gpt-4.1-nano",        // routing decisions — very cheap
+    "compactor":    "gpt-4.1-mini",        // history summarization
+    "review":       "gpt-4.1-mini",        // post-turn code review
+    "fallback":     "gpt-4.1"             // auto-activates if primary fails
+  }
+}
+```
+
+Each slot can point to Anthropic or OpenAI independently. The fallback activates automatically on repeated API failures or rate limits — no manual intervention.
+
+---
+
+## Plugin system
+
+8 lifecycle hooks fire on every agent turn. Plugins are folder-based executables: JSON in, JSON out, any language.
+
+```
+on_message → on_classified → on_tool_before → on_tool_after →
+on_response → on_session_start → on_task_start → on_task_complete
+```
+
+Use cases: audit logging, message routing overrides, external system notifications, input/output guardrails, custom telemetry.
+
+---
+
+## Skills system
+
+Domain knowledge injected per task, not globally.
+
+```
+axium-skills/
+├── rust-development/
+│   └── guidelines.md     # your conventions, crate choices, patterns
+├── docker-ops/
+│   └── guidelines.md     # your infra layout, registry, deploy flow
+└── my-project/
+    └── conventions.md    # codebase-specific rules
+```
+
+In **Skills** mode, the classifier reads your message, selects the relevant folders, and injects their content before the primary model responds. Your conventions are respected without repeating them every session.
+
+---
+
+## Processing modes
+
+| Mode | Behaviour |
+|---|---|
+| **Simple** | Prompt → primary model, 18-tool subset, no classifier overhead |
+| **Supercharge** | Classify → enhance complex prompts → primary model (default) |
+| **Skills** | Classify relevant skills → inject guidelines → primary model |
+
+---
+
+## Extended thinking
+
+```json
+"thinking_effort": "high"
+```
+
+`"low"` / `"medium"` / `"high"` / `"max"` — Anthropic adaptive reasoning before every response. Default is `"high"` for agentic tasks. Adds latency; recommended for decisions that are hard to undo.
+
+---
+
+## Built in Rust — runs anywhere Linux runs
+
+Most agentic tools are Python processes. Axium is a compiled binary. That distinction matters more than it sounds.
+
+- **Single binary** — ships everything including SQLite (FTS5) and TLS. Copy one file, run it.
+- **No Python runtime** — no virtualenv, no dependency resolution, no `pip install` breaking on a new machine or a fresh ARM device.
+- **Low RSS at idle** — realistically in the low tens of MB; Python-based agents typically sit at 50–200 MB before doing any work.
+- **Runs on a Raspberry Pi Zero 2 W** — 512 MB RAM, quad-core ARM Cortex-A53. Cross-compile once with `cargo build --target aarch64-unknown-linux-gnu --release`, copy the binary, run it. A persistent personal AI agent running on a $15 SBC, with Telegram access from anywhere. Python-based agents don't fit.
+- **Tokio async runtime** — parallel tool execution, streaming SSE parsed from raw byte buffers, no per-line allocations.
+- **Graceful shutdown** — SIGTERM waits for in-flight requests before exiting.
+
+---
+
+## Security model
+
+- **Local-only**: the WebSocket handler rejects any non-`127.0.0.1` IP with HTTP 403. The agent is not reachable from other machines on your network.
+- **No cloud state**: all conversation history, memory, and tasks are SQLite + markdown files on your disk. Nothing leaves your machine except API calls to Anthropic/OpenAI.
+- **Secret-free repo**: `config.json` (API keys, SMTP, Telegram token) is gitignored. Only `config.example.json` ships.
+- **Process isolation**: spawned commands use `kill_on_drop(true)` and a configurable timeout. Hanged processes are killed automatically.
+- **Write guard**: the agent cannot write to `/etc`, `/usr`, `/sys`, or your `.ssh` directory.
 
 ---
 
 ## Setup
 
-### 1. Clone and build
+**Requirements:** Rust stable · Anthropic API key · OpenAI key (optional, for classifier/review models)
 
 ```bash
-git clone https://github.com/your-username/axium.git
+# One-line install
+bash <(curl -fsSL https://raw.githubusercontent.com/Broikos-Nikos/axium/main/install.sh)
+
+# Build from source
+git clone https://github.com/Broikos-Nikos/axium.git
 cd axium
-cargo build --release
-```
-
-### 2. Create `config.json`
-
-Copy the template and fill in your API keys:
-
-```bash
 cp config.example.json config.json
+cargo build --release
+./target/release/axiom     # → http://127.0.0.1:3000
+
+# Install as a systemd service
+sudo bash setup.sh
 ```
+
+**Minimal `config.json`:**
 
 ```json
 {
-    "api_keys": {
-        "anthropic": "sk-ant-...",
-        "openai": "sk-proj-..."
-    },
-    "models": {
-        "primary": "claude-sonnet-4-20250514",
-        "primary_provider": "anthropic",
-        "continuation": "claude-sonnet-4-20250514",
-        "continuation_provider": "anthropic",
-        "classifier": "gpt-4.1-mini",
-        "classifier_provider": "openai",
-        "review": "gpt-4.1-mini",
-        "review_provider": "openai",
-        "subagent": "claude-sonnet-4-20250514",
-        "subagent_provider": "anthropic"
-    },
-    "agent": {
-        "name": "Axium"
-    },
-    "soul_file": "soul.md",
-    "settings": {
-        "token_limit": 80000,
-        "terminal_timeout_secs": 120,
-        "max_output_chars": 15000,
-        "max_tool_iterations": 30,
-        "max_retries": 2,
-        "working_directory": "/home/yourname",
-        "conversation_logging": false
-    },
-    "smtp": {
-        "host": "",
-        "port": 587,
-        "user": "",
-        "password": "",
-        "from": ""
-    },
-    "telegram": {
-        "bot_token": "",
-        "allowed_users": []
-    }
+  "api_keys": {
+    "anthropic": "sk-ant-...",
+    "openai":    "sk-proj-..."
+  },
+  "models": {
+    "primary":              "claude-sonnet-4-6",
+    "primary_provider":     "anthropic",
+    "classifier":           "gpt-4.1-nano",
+    "classifier_provider":  "openai",
+    "compactor":            "gpt-4.1-mini",
+    "compactor_provider":   "openai",
+    "review":               "gpt-4.1-mini",
+    "review_provider":      "openai"
+  },
+  "agent": { "name": "Axium", "soul": "" },
+  "settings": {
+    "token_limit":             80000,
+    "max_tokens":              16384,
+    "terminal_timeout_secs":   120,
+    "working_directory":       "~",
+    "memory_file":             "memory.md",
+    "thinking_effort":         "high"
+  }
 }
 ```
 
-### 3. Customize `soul.md`
-
-The soul file is the agent's system prompt. Edit it freely — it hot-reloads without restart. The included `soul.md` is a good starting point.
-
-### 4. Run
-
-```bash
-cargo run --release
-# → http://127.0.0.1:3000
-```
-
-Or install as a systemd service:
-
-```bash
-sudo bash setup.sh
-sudo systemctl status axium
-```
+Put your system prompt in `soul.md` — it hot-reloads without a restart.
 
 ---
 
-## Processing Modes
-
-Select the mode in the UI between **New Session** and **Settings**:
-
-| Mode | Description |
-|------|-------------|
-| **Simple** | Prompt goes directly to the primary model. Fast, no overhead. |
-| **Supercharge** | GPT-4.1-mini classifies complexity first. Complex tasks get extra planning context. Default for background tasks. |
-| **Skills** | LLM scans `axium-skills/` and injects relevant guidelines before responding. Good for domain-specific workflows. |
-
-Mode is stored in browser localStorage — not saved server-side.
-
----
-
-## Skills System
-
-Create folders under `axium-skills/` with markdown files describing guidelines or domain knowledge:
-
-```
-axium-skills/
-├── rust-development/
-│   └── guidelines.md
-├── docker-ops/
-│   └── guidelines.md
-└── my-project/
-    └── conventions.md
-```
-
-In **Skills** mode, the classifier reads your message, picks relevant skill folders, and injects their content into the prompt before calling the primary model.
-
----
-
-## Tool Suite
-
-| Tool | Description |
-|------|-------------|
-| `run_command` | Execute shell commands with timeout, PTY, kill-on-drop |
-| `read_file` | Read files with optional line range |
-| `write_file` | Create or overwrite files |
-| `patch_file` | Find-and-replace text in a file |
-| `search_files` | Regex search with glob filter |
-| `list_directory` | Directory listing with sizes |
-| `browse_url` | HTTP fetch with HTML stripping |
-| `git_command` | Git operations (status, commit, diff, log, etc.) |
-| `scan_project` | Annotated file tree with symbol extraction |
-| `get_dependency_graph` | File-level import map (who uses what) |
-| `find_references` | Project-wide symbol references |
-| `rename_symbol` | AST-aware symbol rename (skips comments/strings) |
-| `plan_file_changes` | List planned edits for user approval |
-| `verify_file_syntax` | Syntax check across 8 languages |
-| `update_memory` | Write to persistent memory file |
-| `update_project_knowledge` | Save project-specific notes to `.axium/knowledge.md` |
-| `queue_task` | Add background task to the task queue |
-| `set_autonomous` | Enable autonomous mode (agent loops up to 10 turns) |
-| `run_subagent` | Spawn a sub-agent for a bounded sub-task |
-| `send_email` | Send email via SMTP |
-| `ask_user` | Pause and ask a clarifying question |
-| `web_search` | DuckDuckGo search |
-| `get_diagnostics` | Fetch VS Code language diagnostics |
-| `delete_file` | Delete a file (with confirmation) |
-| `move_file` | Move or rename a file |
-
----
-
-## Project Awareness (Rust Projects)
-
-For Rust projects, Axium uses `rust-analyzer` to build a live architecture map on every turn:
-
-```
-[ARCHITECTURE]
-  agent/
-    router.rs [2467L] — fn run_agent_turn→AgentEvent; impl TurnConfig: ...
-    sonnet.rs [886L]  — struct SonnetClient{...}; fn build_tools→Vec<Tool>
-  tools/
-    project.rs [546L] — fn build_project_context→String; fn scan_project→String
-```
-
-This is injected into the system prompt automatically — the agent knows your project structure without needing to read individual files first.
-
-The **dependency graph** tool shows file-level imports:
-
-```
-get_dependency_graph("src/agent/router.rs", "dependents")
-→ Files that import router.rs:
-    tui/server.rs
-    worker.rs
-    channels/telegram.rs
-```
-
-Results are cached in `.axium/architecture_cache.json` by file mtime — subsequent calls are instant.
-
----
-
-## Background Task Queue
-
-Queue long-running tasks that execute in the background:
-
-```
-queue_task("Refactor the authentication module and run all tests")
-```
-
-A worker process picks up the task, runs the full agent loop, and notifies you via Telegram (if configured) when done. Results persist in SQLite and are shown when you reconnect.
-
----
-
-## Telegram Integration
-
-Set `telegram.bot_token` and `telegram.allowed_users` in `config.json`. The Telegram channel runs a parallel agent instance — same tools, same memory, same project context. Background task completions are pushed as Telegram notifications.
-
----
-
-## Autonomous Mode
-
-```
-set_autonomous(true)
-```
-
-The agent will continue working on its own for up to 10 turns without waiting for user input. Useful for long refactors or multi-step build pipelines. The UI shows progress in real time.
-
----
-
-## Code Review
-
-After any turn that modifies files, a secondary model runs a silent code review and optionally generates test suggestions. Results are appended to the turn output. Enabled automatically when `review` model is configured.
-
----
-
-## Project Structure
+## Project structure
 
 ```
 axium/
 ├── src/
-│   ├── main.rs                 # Entry point, logging, graceful shutdown
 │   ├── agent/
-│   │   ├── router.rs           # Agent turn: classify → tool loop → self-correct
-│   │   ├── sonnet.rs           # LLM API client (Anthropic + OpenAI), tool definitions
-│   │   ├── classifier.rs       # Prompt classifier + skills analyzer + code reviewer
-│   │   └── compactor.rs        # History compaction + tool output summarization
-│   ├── tui/
-│   │   └── server.rs           # Axum routes, WebSocket handler, local-only guard
-│   ├── tools/
-│   │   ├── terminal.rs         # Shell execution
-│   │   ├── browser.rs          # URL fetching with HTML stripping
-│   │   ├── search.rs           # File search + directory listing
-│   │   ├── project.rs          # Project context + architecture map + symbol extraction
-│   │   ├── email.rs            # SMTP email sending
-│   │   └── depgraph.rs         # File-level dependency graph
-│   ├── channels/
-│   │   └── telegram.rs         # Telegram message handler
-│   ├── db/
-│   │   ├── history.rs          # SQLite chat history
-│   │   └── tasks.rs            # SQLite task queue
-│   ├── memory/
-│   │   └── store.rs            # Read/write persistent memory.md
-│   ├── config/
-│   │   └── loader.rs           # Config + soul loading (hot-reload)
-│   ├── worker.rs               # Background task worker (polls every 4s)
-│   └── watcher.rs              # File watcher (notify v6)
-├── static/
-│   └── index.html              # Web UI (single-file HTML/CSS/JS)
-├── axium-skills/               # Domain-specific skill files (Skills mode)
-├── soul.md                     # Agent system prompt (hot-reloadable)
-├── setup.sh                    # Systemd service installer
-└── Cargo.toml
+│   │   ├── router.rs        # classify → tool loop → self-correct → quality review
+│   │   ├── sonnet.rs        # Anthropic + OpenAI streaming client, 31 tool definitions
+│   │   ├── classifier.rs    # local scorer + LLM classifier + code reviewer
+│   │   └── compactor.rs     # history compaction + conversation recovery
+│   ├── tui/server.rs        # Axum routes, WebSocket handler, local-only guard
+│   ├── tools/               # terminal, browser, search, project, email, depgraph
+│   ├── channels/telegram.rs # Telegram bot — full agent on mobile
+│   ├── db/                  # SQLite: chat history (FTS5) + task queue
+│   ├── memory/store.rs      # persistent memory.md read/write
+│   ├── plugins/mod.rs       # plugin manager, 8 lifecycle hooks
+│   ├── worker.rs            # background task worker, polls every 4s
+│   └── watcher.rs           # file watcher → live diagnostics
+├── static/index.html        # browser UI — single file, no build step
+├── axium-skills/            # domain skill folders (Skills mode)
+├── axium-plugins/           # lifecycle hook plugins
+├── soul.md                  # system prompt (hot-reloadable)
+└── memory.md                # agent memory (gitignored)
 ```
-
----
-
-## Security
-
-- **Local-only**: WebSocket handler rejects any non-`127.0.0.1` connection with HTTP 403
-- **No cloud state**: All data is SQLite + markdown files on disk
-- **Secret-free repo**: `config.json` (API keys, SMTP, Telegram token) is gitignored
-- **Process isolation**: Shell commands use `kill_on_drop(true)` and enforced timeouts
 
 ---
 

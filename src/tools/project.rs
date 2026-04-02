@@ -61,26 +61,6 @@ pub fn build_project_context(working_dir: &str) -> String {
         parts.push(format!("[PROJECT FILES] {}", key_files.join(", ")));
     }
 
-    // Shallow directory listing (depth 1, max 40 entries)
-    if let Ok(entries) = std::fs::read_dir(working_dir) {
-        let mut names: Vec<String> = entries
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                !name.starts_with('.') && name != "target" && name != "node_modules"
-            })
-            .take(40)
-            .map(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                if e.path().is_dir() { format!("{}/", name) } else { name }
-            })
-            .collect();
-        names.sort();
-        if !names.is_empty() {
-            parts.push(format!("[DIRECTORY]\n{}", names.join("  ")));
-        }
-    }
-
     // Architecture map for Rust projects (cached, uses rust-analyzer)
     if Path::new(working_dir).join("Cargo.toml").exists() {
         let arch = build_architecture_map(working_dir);

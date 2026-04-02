@@ -2,6 +2,24 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 use super::{detect_provider, Message, Provider};
 
+/// System prompt for the compactor model. Gives it context about the agent so it
+/// produces higher-quality summaries that preserve actionable information.
+const COMPACTOR_SYSTEM: &str = "\
+You are summarizing conversations from an autonomous Linux assistant that uses tools \
+(run_command, read_file, write_file, patch_file, search_files, git_command, etc.) to \
+complete coding and system tasks. Your summary replaces the old messages — the assistant \
+will only see your summary plus the most recent messages.\n\n\
+Preserve:\n\
+- File paths created/edited/read and what was done to them\n\
+- Commands run and their outcomes (especially errors)\n\
+- Decisions made and user preferences stated\n\
+- Task status: what is done, what is still pending\n\
+- <tool_trace> blocks verbatim — they are already compressed\n\n\
+Omit:\n\
+- Pleasantries, acknowledgements, verbose explanations\n\
+- Plans that were already executed (keep the result, drop the plan)\n\
+- Redundant file contents — note the file and purpose, not the code";
+
 pub struct Compactor {
     anthropic_key: String,
     openai_key: String,
@@ -72,7 +90,10 @@ impl Compactor {
     async fn call_openai(&self, prompt: &str, max_tokens: usize) -> Result<String> {
         let body = serde_json::json!({
             "model": self.model,
-            "messages": [{ "role": "user", "content": prompt }],
+            "messages": [
+                { "role": "system", "content": COMPACTOR_SYSTEM },
+                { "role": "user", "content": prompt },
+            ],
             "max_tokens": max_tokens,
         });
 
@@ -104,6 +125,7 @@ impl Compactor {
         let body = serde_json::json!({
             "model": self.model,
             "max_tokens": max_tokens,
+            "system": COMPACTOR_SYSTEM,
             "messages": [{ "role": "user", "content": prompt }],
         });
 

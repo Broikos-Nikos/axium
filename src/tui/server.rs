@@ -39,6 +39,12 @@ pub struct AppState {
     pub plugin_manager: Arc<RwLock<crate::plugins::PluginManager>>,
     /// Cached project context: (timestamp, working_dir, content). Invalidated by watcher or after 60s.
     pub project_context_cache: Arc<RwLock<Option<(std::time::Instant, String, String)>>>,
+    /// Buffered conversation log entries. Flushed periodically, on /api/flush, and on shutdown.
+    pub conv_log_buffer: Arc<Mutex<Vec<String>>>,
+    /// Wakes the background flush task immediately (100-entry threshold or manual trigger).
+    pub flush_notify: Arc<tokio::sync::Notify>,
+    /// In-flight task file contents keyed by task_id → (absolute path, current file content).
+    pub task_file_buffers: Arc<RwLock<std::collections::HashMap<i64, (std::path::PathBuf, String)>>>,
 }
 
 /// Get project context, using the cached value if still valid (< 60s and same working_dir),
@@ -90,6 +96,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/plugins", get(list_plugins_handler))
         .route("/api/plugins/toggle", post(toggle_plugin_handler))
         .route("/api/plugins/reorder", post(reorder_plugins_handler))
+        .route("/api/flush", post(flush_handler))
 
         .layer(axum::middleware::from_fn(lan_guard))
         .with_state(state)
@@ -630,6 +637,19 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         review_provider: cfg.models.review_provider.clone(),
                         mode: mode.clone(),
                         plugin_manager: Some(Arc::clone(&state.plugin_manager)),
+                        compaction_threshold: cfg.settings.compaction_threshold,
+                        thinking_effort: cfg.settings.thinking_effort.clone(),
+                        fallback_model: cfg.models.fallback.clone(),
+                        fallback_provider: cfg.models.fallback_provider.clone(),
+                        conv_logger: if cfg.settings.conversation_logging {
+                            Some(crate::agent::router::ConvLogger {
+                                buffer: Arc::clone(&state.conv_log_buffer),
+                                notify: Arc::clone(&state.flush_notify),
+                            })
+                        } else {
+                            None
+                        },
+                        chat_db: Arc::clone(&state.chat_db),
                     },
                     ctx,
                     cfg.settings.memory_file.clone(),
@@ -944,6 +964,17 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                             }
                             Some(AgentEvent::TaskQueued { id, title }) => {
                                 let msg = serde_json::json!({"type": "task_queued", "id": id, "title": title});
+                                let _ = ws_tx.send(WsMessage::Text(msg.to_string().into())).await;
+                            }
+                            Some(AgentEvent::TokenUsage { input, output, cache_read, cache_write, model }) => {
+                                let msg = serde_json::json!({
+                                    "type": "token_usage",
+                                    "input": input,
+                                    "output": output,
+                                    "cache_read": cache_read,
+                                    "cache_write": cache_write,
+                                    "model": model,
+                                });
                                 let _ = ws_tx.send(WsMessage::Text(msg.to_string().into())).await;
                             }
                             Some(AgentEvent::Retry) => {
@@ -1639,6 +1670,49 @@ async fn reorder_plugins_handler(
     let mut pm = state.plugin_manager.write().await;
     pm.set_order(&order);
     Json(serde_json::json!({"ok": true}))
+}
+
+async fn flush_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    flush_conv_log(&state).await;
+    flush_task_buffers(&state).await;
+    Json(serde_json::json!({"ok": true}))
+}
+
+/// Atomically drain the conversation log buffer and append to disk.
+pub async fn flush_conv_log(state: &AppState) {
+    let entries: Vec<String> = {
+        let mut guard = state.conv_log_buffer.lock().await;
+        if guard.is_empty() { return; }
+        std::mem::take(&mut *guard)
+    };
+    let log_path = std::path::Path::new(&state.memory_path)
+        .parent()
+        .map(|d| d.join("conversation.log"))
+        .unwrap_or_else(|| std::path::PathBuf::from("conversation.log"));
+    if let Some(parent) = log_path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    let content: String = entries.concat();
+    use tokio::io::AsyncWriteExt;
+    match tokio::fs::OpenOptions::new().create(true).append(true).open(&log_path).await {
+        Ok(mut f) => { if let Err(e) = f.write_all(content.as_bytes()).await {
+            warn!(error = %e, "Failed to flush conversation log buffer");
+        }}
+        Err(e) => warn!(error = %e, path = %log_path.display(), "Failed to open conversation log for flush"),
+    }
+}
+
+/// Snapshot all in-flight task file buffers and write them to disk.
+pub async fn flush_task_buffers(state: &AppState) {
+    let snapshots: Vec<(i64, std::path::PathBuf, String)> = {
+        let guard = state.task_file_buffers.read().await;
+        guard.iter().map(|(id, (p, c))| (*id, p.clone(), c.clone())).collect()
+    };
+    for (_task_id, path, content) in snapshots {
+        if let Err(e) = tokio::fs::write(&path, &content).await {
+            warn!(error = %e, path = %path.display(), "Failed to flush task buffer");
+        }
+    }
 }
 
 /// Returns true for loopback and RFC-1918 private addresses.

@@ -45,17 +45,19 @@ fn tasks_dir(working_dir: &str) -> PathBuf {
     PathBuf::from(base).join("tasks")
 }
 
-/// Write or overwrite a task state file.
-fn write_task_file(dir: &PathBuf, task: &Task, progress_log: &str, result_text: &str) {
-    let _ = std::fs::create_dir_all(dir);
-    let path = dir.join(format!("task_{}.md", task.id));
+/// Build the content string for a task state file.
+fn build_task_content(task: &Task, progress_log: &str, result_text: &str) -> String {
+    use std::fmt::Write;
     let status_label = match task.status.as_str() {
         "running" => "running",
         "done" => "done",
         "failed" => "failed",
         _ => "pending",
     };
-    let mut content = format!(
+    let capacity = 256 + task.context.len() + progress_log.len() + result_text.len();
+    let mut content = String::with_capacity(capacity);
+    let _ = write!(
+        content,
         "# Task #{}: {}\n\
         **Status**: {}  \n\
         **Attempt**: {}/{}  \n\
@@ -67,33 +69,54 @@ fn write_task_file(dir: &PathBuf, task: &Task, progress_log: &str, result_text: 
         task.created_at, task.updated_at,
     );
     if !task.context.is_empty() {
-        content.push_str(&format!("## Context\n{}\n\n", task.context));
+        let _ = write!(content, "## Context\n{}\n\n", task.context);
     }
     if !progress_log.is_empty() {
-        content.push_str(&format!("## Progress\n{}\n\n", progress_log));
+        let _ = write!(content, "## Progress\n{}\n\n", progress_log);
     }
     if !result_text.is_empty() {
-        content.push_str(&format!("## Result\n{}\n", result_text));
+        let _ = write!(content, "## Result\n{}\n", result_text);
     }
-    if let Err(e) = std::fs::write(&path, &content) {
-        warn!(error = %e, path = %path.display(), "Failed to write task state file");
+    content
+}
+
+type TaskBuffers = Arc<tokio::sync::RwLock<std::collections::HashMap<i64, (PathBuf, String)>>>;
+
+/// Write a single task's buffer to disk without removing it (used before retry).
+async fn flush_task_id(task_id: i64, buffers: &TaskBuffers) {
+    let snapshot = buffers.read().await.get(&task_id).cloned();
+    if let Some((path, content)) = snapshot {
+        if let Err(e) = tokio::fs::write(&path, &content).await {
+            warn!(error = %e, path = %path.display(), task_id, "Failed to flush task buffer");
+        }
     }
 }
 
-/// Append a timestamped line to a task's progress log file.
-fn append_task_log(dir: &PathBuf, task_id: i64, line: &str) {
-    let path = dir.join(format!("task_{}.md", task_id));
+/// Write or overwrite a task state file.
+/// Non-terminal (running/pending): buffered in RAM only.
+/// Terminal (done/failed): written to disk immediately and evicted from buffer.
+async fn write_task_file(dir: &PathBuf, task: &Task, progress_log: &str, result_text: &str, buffers: &TaskBuffers) {
+    let path = dir.join(format!("task_{}.md", task.id));
+    let content = build_task_content(task, progress_log, result_text);
+    let is_terminal = matches!(task.status.as_str(), "done" | "failed");
+    if is_terminal {
+        let _ = tokio::fs::create_dir_all(dir).await;
+        if let Err(e) = tokio::fs::write(&path, &content).await {
+            warn!(error = %e, path = %path.display(), "Failed to write task state file");
+        }
+        buffers.write().await.remove(&task.id);
+    } else {
+        buffers.write().await.insert(task.id, (path, content));
+    }
+}
+
+/// Append a timestamped line to a task's in-memory progress log.
+async fn append_task_log(task_id: i64, line: &str, buffers: &TaskBuffers) {
     let ts = chrono::Local::now().format("%H:%M:%S").to_string();
     let entry = format!("- [{}] {}\n", ts, line);
-    // Append to existing file (if it exists)
-    if let Ok(mut existing) = std::fs::read_to_string(&path) {
-        // Insert before "## Result" section if it exists, otherwise append
-        if let Some(pos) = existing.find("## Result\n") {
-            existing.insert_str(pos, &entry);
-        } else {
-            existing.push_str(&entry);
-        }
-        let _ = std::fs::write(&path, existing);
+    let mut guard = buffers.write().await;
+    if let Some((_, ref mut content)) = guard.get_mut(&task_id) {
+        content.push_str(&entry);
     }
 }
 
@@ -206,6 +229,12 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
             review_provider: cfg.models.review_provider.clone(),
             mode: "supercharge".to_string(),
             plugin_manager: Some(Arc::clone(&state.plugin_manager)),
+            compaction_threshold: cfg.settings.compaction_threshold,
+            thinking_effort: cfg.settings.thinking_effort.clone(),
+            fallback_model: cfg.models.fallback.clone(),
+            fallback_provider: cfg.models.fallback_provider.clone(),
+            conv_logger: None,
+            chat_db: Arc::clone(&state.chat_db),
         };
 
         let soul = crate::config::loader::load_soul(&cfg.agent.soul);
@@ -248,23 +277,20 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
 
         let mut history = vec![Message {
             role: "user".to_string(),
-            content: if task.context.is_empty() {
-                task.title.clone()
-            } else {
-                format!("{}\n\nContext:\n{}", task.title, task.context)
-            },
+            content: task.title.clone(),
         }];
 
         let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
         let task_db = Arc::clone(&state.task_db);
+        let task_buffers = Arc::clone(&state.task_file_buffers);
 
-        // Write initial task state file
-        write_task_file(&tdir, &task, "- Starting task execution\n", "");
+        // Write initial task state file (buffered)
+        write_task_file(&tdir, &task, "- Starting task execution\n", "", &task_buffers).await;
 
         // Drain events in background — forward progress to UI and task file
         let broadcast_tx = state.broadcast_tx.clone();
         let task_id = task.id;
-        let tdir_clone = tdir.clone();
+        let task_buffers_drain = Arc::clone(&task_buffers);
         let drain = tokio::spawn(async move {
             let mut output = String::new();
             while let Some(event) = rx.recv().await {
@@ -275,7 +301,7 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
                         let _ = reply_tx.send("yes".to_string());
                     }
                     AgentEvent::ToolCall { ref name, .. } => {
-                        append_task_log(&tdir_clone, task_id, &format!("Tool: {}", name));
+                        append_task_log(task_id, &format!("Tool: {}", name), &task_buffers_drain).await;
                         let _ = broadcast_tx.send(serde_json::json!({
                             "type": "task_progress",
                             "id": task_id,
@@ -326,11 +352,11 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
 
             if verified {
                 info!(id = task.id, "Task verified successfully");
-                append_task_log(&tdir, task.id, "Verification: PASSED");
+                append_task_log(task.id, "Verification: PASSED", &task_buffers).await;
                 // Write final task file
                 let mut final_task = task.clone();
                 final_task.status = "done".to_string();
-                write_task_file(&tdir, &final_task, "", &raw_result);
+                write_task_file(&tdir, &final_task, "", &raw_result, &task_buffers).await;
                 ("done".to_string(), raw_result)
             } else {
                 // Check if we can retry
@@ -339,17 +365,17 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
                 if new_attempt >= task.max_attempts {
                     // Force finish — deliver partial results
                     info!(id = task.id, attempt = new_attempt, "Task verification failed on final attempt — force finishing");
-                    append_task_log(&tdir, task.id, &format!("Verification FAILED (final attempt): {}", reason));
+                    append_task_log(task.id, &format!("Verification FAILED (final attempt): {}", reason), &task_buffers).await;
                     let partial = format!("[PARTIAL — verification failed: {}]\n\n{}", reason, raw_result);
                     let mut final_task = task.clone();
                     final_task.status = "done".to_string();
                     final_task.attempt = new_attempt;
-                    write_task_file(&tdir, &final_task, "", &partial);
+                    write_task_file(&tdir, &final_task, "", &partial, &task_buffers).await;
                     ("done".to_string(), partial)
                 } else {
                     // Retry — set back to pending with failure context
                     info!(id = task.id, attempt = new_attempt, reason = %reason, "Task verification failed — scheduling retry");
-                    append_task_log(&tdir, task.id, &format!("Verification FAILED: {} — retrying", reason));
+                    append_task_log(task.id, &format!("Verification FAILED: {} — retrying", reason), &task_buffers).await;
                     let failure_ctx = format!("PREVIOUS FAILURE (attempt {}): {}", new_attempt, reason);
                     let _ = state.task_db.save_task_result(task.id, &failure_ctx, "pending");
                     // Broadcast retry event
@@ -361,6 +387,7 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
                         "max_attempts": task.max_attempts,
                         "reason": reason,
                     }).to_string());
+                    flush_task_id(task.id, &task_buffers).await;
                     return Ok(());
                 }
             }
@@ -369,15 +396,15 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
             let new_attempt = state.task_db.increment_attempt(task.id)
                 .unwrap_or(task.attempt + 1);
             if new_attempt >= task.max_attempts {
-                append_task_log(&tdir, task.id, &format!("FAILED (final attempt): {}", raw_result));
+                append_task_log(task.id, &format!("FAILED (final attempt): {}", raw_result), &task_buffers).await;
                 let mut final_task = task.clone();
                 final_task.status = "failed".to_string();
                 final_task.attempt = new_attempt;
-                write_task_file(&tdir, &final_task, "", &raw_result);
+                write_task_file(&tdir, &final_task, "", &raw_result, &task_buffers).await;
                 ("failed".to_string(), raw_result)
             } else {
                 info!(id = task.id, attempt = new_attempt, "Task execution failed — scheduling retry");
-                append_task_log(&tdir, task.id, &format!("Execution FAILED: {} — retrying", raw_result));
+                append_task_log(task.id, &format!("Execution FAILED: {} — retrying", raw_result), &task_buffers).await;
                 let failure_ctx = format!("PREVIOUS FAILURE (attempt {}): {}", new_attempt, raw_result);
                 let _ = state.task_db.save_task_result(task.id, &failure_ctx, "pending");
                 let _ = state.broadcast_tx.send(serde_json::json!({
@@ -388,6 +415,7 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
                     "max_attempts": task.max_attempts,
                     "reason": raw_result,
                 }).to_string());
+                flush_task_id(task.id, &task_buffers).await;
                 return Ok(());
             }
         }

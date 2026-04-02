@@ -40,6 +40,12 @@ pub struct Models {
     pub review: String,
     #[serde(default)]
     pub review_provider: String,
+    /// Fallback model used when the primary model is unavailable (outage, repeated errors).
+    /// Leave empty to disable fallback. Example: "gpt-4.1" as fallback when Anthropic is down.
+    #[serde(default)]
+    pub fallback: String,
+    #[serde(default)]
+    pub fallback_provider: String,
 }
 
 fn default_classifier_model() -> String { "gpt-4.1-nano".to_string() }
@@ -92,6 +98,17 @@ pub struct Settings {
     /// How many user turns between conversation recovery passes (0 = disabled).
     #[serde(default = "default_recovery_interval")]
     pub recovery_interval: usize,
+    /// Percentage of token_limit at which compaction triggers (0-100, default 60).
+    /// Lower = compact sooner (more cache-friendly, less context).
+    /// Higher = compact later (more context, but bigger prefix = more tokens before cache kicks in).
+    /// Set to 100 for the old behavior (compact only when limit is hit).
+    #[serde(default = "default_compaction_threshold")]
+    pub compaction_threshold: usize,
+    /// Anthropic extended thinking effort level: "off", "low", "medium", "high", "max".
+    /// "high" is recommended for agentic coding tasks. "off" disables thinking entirely.
+    /// Only applies to Anthropic models (Claude 4.6+). Ignored for OpenAI.
+    #[serde(default = "default_thinking_effort")]
+    pub thinking_effort: String,
 }
 
 fn default_max_tokens() -> usize { 4096 }
@@ -104,6 +121,8 @@ fn default_working_directory() -> String { "~".to_string() }
 fn default_smtp_port() -> u16 { 587 }
 fn default_conversation_logging() -> bool { true }
 fn default_recovery_interval() -> usize { 6 }
+fn default_compaction_threshold() -> usize { 60 }
+fn default_thinking_effort() -> String { "high".to_string() }
 
 pub fn load_config(path: &str) -> Result<Config> {
     let content = fs::read_to_string(path)?;
