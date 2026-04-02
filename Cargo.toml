@@ -6,6 +6,10 @@ description = "Axium — local-first autonomous Linux assistant"
 authors = ["Nikos Broikos <nikos@broikos.gr>"]
 homepage = "https://broikos.gr"
 
+[[bin]]
+name = "axium"
+path = "src/main.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }

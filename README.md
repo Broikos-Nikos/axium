@@ -1,13 +1,25 @@
 # Axium
 
 > **Self-hosted autonomous AI agent. Built in Rust. Runs on your Linux machine — including a Raspberry Pi.**
-> Persistent memory · Background task queue · Multi-model cost routing · 31 parallel tools · Telegram channel · Plugin system
+> Persistent memory · Background task queue · Multi-model cost routing · 31 parallel tools · CLI + SSH · Telegram channel · Plugin system
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/Broikos-Nikos/axium/main/install.sh)
 ```
 
-Opens at `http://127.0.0.1:3000`. No account. No telemetry. Your data stays on your disk.
+No account. No telemetry. Your data stays on your disk.
+
+---
+
+## Three ways to access
+
+```
+axium                  # interactive CLI REPL — works over SSH
+axium --server         # browser UI at http://127.0.0.1:3000
+Telegram               # full agent on mobile, while server runs in background
+```
+
+All three share the same agent, the same memory, and the same conversation history.
 
 ---
 
@@ -48,6 +60,37 @@ No copy-pasting. No context-switching. No babysitting.
 
 ---
 
+## CLI and SSH access
+
+The default mode is a full interactive REPL over stdin/stdout — no browser required. SSH into any machine running Axium and use it as if it were local.
+
+```
+$ axium
+
+CLI mode — type a message and press Enter. /new to reset, /quit to exit.
+
+> scan the project for unused dependencies and remove them
+
+[tool: scan_project]
+[tool: read_file]
+[tool: run_command]
+Found 3 unused crates in Cargo.toml. Removing...
+[tool: patch_file]
+[tool: run_command]  → cargo check: ok
+Done. Removed: once_cell, thiserror, lazy_static.
+```
+
+- **Streams token-by-token** — responses appear as they're generated, not buffered.
+- **Tool calls shown inline** — `[tool: run_command]`, `[tool: read_file]` etc. print to stderr in real time so you see what it's doing.
+- **Full agent stack** — same classifier, compactor, memory, plugins, and all 31 tools as the browser UI.
+- **Session persisted to SQLite** — CLI history is searchable with `search_history` alongside browser sessions.
+- **Interactive follow-ups** — if the agent needs to ask a clarifying question (`ask_user`), it pauses and reads your reply inline.
+- **/new** resets the conversation; **/quit** or **/exit** exits. Full session survives restarts.
+
+This makes Axium usable on headless servers, remote machines over SSH, or a Raspberry Pi with no monitor attached.
+
+---
+
 ## Why it beats the best agentic tools
 
 The leading agentic tools — terminal-based coding agents, IDE-integrated assistants — are genuinely excellent. They reason deeply, edit code accurately, and handle complex multi-step tasks. If IDE integration or a managed cloud experience is your priority, they may be the better fit.
@@ -74,10 +117,11 @@ Where they stop is where Axium starts.
 | Plugin system — 8 lifecycle hooks, language-agnostic | ✅ | ❌ |
 | Injectable domain skills per task type | ✅ `axium-skills/` | ❌ |
 | Telegram channel with full agent access | ✅ | ❌ |
+| **CLI / SSH access** — full agent over stdin/stdout, no browser needed | ✅ | ❌ |
 | Runs on a Raspberry Pi Zero 2 W or equivalent ARM SBC | ✅ | ❌ Python-based |
-| IDE integration | ❌ browser UI only | ✅ |
+| IDE integration | ❌ no IDE plugin | ✅ |
 
-The last two rows in the left column are intentional. Axium is a compiled Rust binary — it runs anywhere Linux runs, including constrained hardware. If IDE integration matters, it is not the right tool. Everything else in the table is real, verifiable, and in the source code.
+The last row is intentional: Axium has no IDE plugin. If deep VS Code / JetBrains integration is your priority, it is not the right tool. You get CLI, browser, and Telegram instead — and a binary that runs on a $15 ARM board. Everything else in the table is real, verifiable, and in the source code.
 
 ---
 
@@ -269,7 +313,8 @@ git clone https://github.com/Broikos-Nikos/axium.git
 cd axium
 cp config.example.json config.json
 cargo build --release
-./target/release/axiom     # → http://127.0.0.1:3000
+./target/release/axium            # → interactive CLI REPL
+./target/release/axium --server   # → http://127.0.0.1:3000
 
 # Install as a systemd service
 sudo bash setup.sh
@@ -321,7 +366,9 @@ axium/
 │   │   └── compactor.rs     # history compaction + conversation recovery
 │   ├── tui/server.rs        # Axum routes, WebSocket handler, local-only guard
 │   ├── tools/               # terminal, browser, search, project, email, depgraph
-│   ├── channels/telegram.rs # Telegram bot — full agent on mobile
+│   ├── channels/
+│   │   ├── telegram.rs  # Telegram bot — full agent on mobile
+│   │   └── cli.rs       # interactive CLI REPL — works over SSH
 │   ├── db/                  # SQLite: chat history (FTS5) + task queue
 │   ├── memory/store.rs      # persistent memory.md read/write
 │   ├── plugins/mod.rs       # plugin manager, 8 lifecycle hooks

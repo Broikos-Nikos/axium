@@ -25,8 +25,14 @@ async fn main() -> Result<()> {
         .compact()
         .init();
 
-    let config_path = "config.json";
-    let mut cfg = config::loader::load_config(config_path)?;
+    let config_path = resolve_config_path();
+    // Data directory: all relative paths are resolved against the config file's parent.
+    let data_dir = std::path::Path::new(&config_path)
+        .canonicalize()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let mut cfg = config::loader::load_config(&config_path)?;
 
     // Environment variable fallback for API keys
     if cfg.api_keys.anthropic.is_empty() {
@@ -52,14 +58,15 @@ async fn main() -> Result<()> {
         return Err(anyhow::anyhow!("No API keys configured. Add at least one API key to config.json then restart."));
     }
 
-    let memory_path = cfg.settings.memory_file.clone();
+    let memory_path = resolve_data_path(&data_dir, &cfg.settings.memory_file);
 
     // Ensure memory file exists
     let _ = memory::store::load_memory(&memory_path)?;
 
     // Initialize SQLite databases
-    let chat_db = Arc::new(db::history::ChatDb::open("chat_history.db")?);
-    let task_db = Arc::new(db::tasks::TaskDb::open("chat_history.db")?);
+    let db_path = resolve_data_path(&data_dir, "chat_history.db");
+    let chat_db = Arc::new(db::history::ChatDb::open(&db_path)?);
+    let task_db = Arc::new(db::tasks::TaskDb::open(&db_path)?);
     info!("SQLite database initialized");
 
     // Prune old sessions on startup and periodically (every 6 hours)
@@ -127,6 +134,12 @@ async fn main() -> Result<()> {
         watcher::spawn_watcher(working_dir, broadcast_tx, project_context_cache);
     }
     worker::spawn_worker(state.clone());
+
+    // Default mode: interactive CLI REPL. Pass --server to start the web server instead.
+    if !std::env::args().any(|a| a == "--server") {
+        channels::cli::run(state).await;
+        return Ok(());
+    }
 
     // Background flush task: wakes every 30s or when signalled (buffer threshold / /api/flush)
     {
@@ -207,6 +220,48 @@ async fn main() -> Result<()> {
     tui::server::flush_task_buffers(&state).await;
     info!("Server stopped");
     Ok(())
+}
+
+/// Resolve a data file path: absolute paths pass through; relative paths are joined to data_dir.
+fn resolve_data_path(data_dir: &std::path::Path, path: &str) -> String {
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        path.to_string()
+    } else {
+        data_dir.join(p).to_string_lossy().into_owned()
+    }
+}
+
+/// Resolve config.json path: --config arg > next to binary > ~/.config/axium/config.json > CWD.
+fn resolve_config_path() -> String {
+    // 1. Explicit --config <path> argument
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--config") {
+        if let Some(path) = args.get(pos + 1) {
+            return path.clone();
+        }
+    }
+
+    // 2. Same directory as the binary
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("config.json");
+            if candidate.exists() {
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+    }
+
+    // 3. ~/.config/axium/config.json
+    if let Ok(home) = std::env::var("HOME") {
+        let candidate = std::path::Path::new(&home).join(".config/axium/config.json");
+        if candidate.exists() {
+            return candidate.to_string_lossy().into_owned();
+        }
+    }
+
+    // 4. Fallback: current working directory (original behaviour)
+    "config.json".to_string()
 }
 
 /// Determine the machine's outbound LAN IP without sending any data.
