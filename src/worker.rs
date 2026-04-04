@@ -227,6 +227,8 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
             classifier_provider: cfg.models.classifier_provider.clone(),
             review_model: cfg.models.review.clone(),
             review_provider: cfg.models.review_provider.clone(),
+            compactor_model: cfg.models.compactor.clone(),
+            compactor_provider: cfg.models.compactor_provider.clone(),
             mode: "supercharge".to_string(),
             plugin_manager: Some(Arc::clone(&state.plugin_manager)),
             compaction_threshold: cfg.settings.compaction_threshold,
