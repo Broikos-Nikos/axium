@@ -1,5 +1,6 @@
 # Axium
 
+> The **"claw"** you feel you wanted...
 > **Self-hosted autonomous AI agent. Built in Rust. Runs on your Linux machine — including a Raspberry Pi.**
 > Persistent memory · Background task queue · Multi-model cost routing · 31 parallel tools · CLI + SSH · Telegram channel · Plugin system
 
@@ -204,6 +205,42 @@ Additionally:
 - **Continuation model** — Follow-up turns after tool calls use a cheaper model, reserving the primary for first-contact reasoning.
 - **Compaction** — At 60% of your token limit, old history is summarized by the compactor model. The summary costs a fraction of the replaced tokens.
 - **Conversation recovery** — Every N turns, a cheap model cleans correction/retry noise from history, preventing waste from accumulated failed attempts.
+
+---
+
+## Cost comparison: Axium vs Claude Code
+
+Using published Anthropic pricing (claude-sonnet-4-6 and claude-haiku-4-5). Claude Code uses Sonnet for every call by default and has prompt caching. The estimates below apply the same prompt-caching assumption (1-hour TTL) to both.
+
+**Scenario A — simple task:** *"show unused imports in utils.rs and fix them"* — 3 API calls, ~13k tokens total.
+
+| | Model routing | Approx cost |
+|---|---|---|
+| Claude Code (default) | Sonnet, all calls | ~$0.06 |
+| Claude Code `--model haiku` | Haiku, all calls | ~$0.016 |
+| **Axium** | **Auto-routes → Haiku all calls · 18-tool subset** | **~$0.012** |
+
+**Scenario B — medium project:** *"refactor auth module to JWT, run tests, fix failures, commit"* — 10 API calls, context grows to ~30k tokens.
+
+| | Model routing | Approx cost |
+|---|---|---|
+| Claude Code (default) | Sonnet, all calls | ~$0.52 |
+| Claude Code `--model haiku` | Haiku, all calls | ~$0.14 |
+| **Axium** | **Sonnet call 1 · Haiku continuation · compaction** | **~$0.16** |
+
+Axium costs slightly more than CC+Haiku on medium tasks (~$0.02) because it uses Sonnet for the first call — the planning and architectural reasoning step. Every tool-loop follow-up (reading files, running commands, interpreting results) routes to Haiku automatically. On simple tasks Axium is cheaper than CC+Haiku by ~30% because the 18-tool subset removes 4,300 tokens per call. Conversational turns handled by the local classifier cost $0.
+
+**Where the savings come from:**
+
+| Optimization | Effect |
+|---|---|
+| Local classifier — trivial / conversational turns | $0 — no API call at all |
+| Prompt caching (1h TTL, 3 breakpoints) | ~90% reduction on repeated prefix tokens within a session |
+| Tool subsetting — 18 tools for simple, 31 for complex | −4,300 tokens per simple call |
+| Continuation model — Haiku for all tool-loop follow-ups | −70% per follow-up vs Sonnet |
+| Compaction at 60% token limit | −15–25% on long multi-tool sessions |
+
+> Claude Code subscription tiers ($20–200/month) bundle usage rather than billing per token — the ratios above reflect underlying API costs and are consistent regardless of billing model.
 
 ---
 

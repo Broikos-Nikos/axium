@@ -123,6 +123,9 @@ pub struct TurnConfig {
     /// Model used for post-turn code review and test generation.
     pub review_model: String,
     pub review_provider: String,
+    /// Model used for history compaction.
+    pub compactor_model: String,
+    pub compactor_provider: String,
     /// Plugin manager for hook execution (None in sub-agents).
     pub plugin_manager: Option<std::sync::Arc<tokio::sync::RwLock<crate::plugins::PluginManager>>>,
     /// Percentage of token_limit at which compaction triggers (0-100).
@@ -177,6 +180,7 @@ pub async fn classify_and_run(
 
     let mut is_complex = false;
     let mut is_medium = false;
+    let mut all_cheap = cfg.mode == "simple"; // true → use continuation model even for call 1
     let mut enhanced_msg: Option<String> = None;
     let mut skill_context = String::new();
 
@@ -247,10 +251,11 @@ pub async fn classify_and_run(
                         enhanced_msg = Some(enhanced);
                     }
                     Ok(PromptClass::Simple) => {
-                        info!(class = "simple", "Classifier: pass-through");
+                        all_cheap = true;
+                        info!(class = "simple", "Classifier: pass-through on continuation model");
                         let _ = tx.send(AgentEvent::Classified {
                             class: "simple".into(),
-                            detail: "Direct to primary model".into(),
+                            detail: "Simple task — continuation model for all calls".into(),
                         });
                     }
                     Ok(PromptClass::Medium) => {
@@ -308,7 +313,7 @@ pub async fn classify_and_run(
     for round in 0..MAX_VERIFY_ROUNDS {
         let pre_turn_len = history.len();
         let (text, mem_ops, turn_compacted) = run_agent_turn(
-            classifier, sonnet, compactor, history, memory, soul_ref, project_context, task_db, &cfg, tx,
+            classifier, sonnet, compactor, history, memory, soul_ref, project_context, task_db, &cfg, tx, all_cheap,
         ).await?;
 
         // If history shrank, compaction happened in-place — update the baseline so
@@ -478,7 +483,7 @@ pub async fn classify_and_run(
                         );
                         history.push(Message::user(&repair_msg));
                         let (repair_text, repair_ops, _) = run_agent_turn(
-                            classifier, sonnet, compactor, history, memory, soul_ref, project_context, task_db, &cfg, tx,
+                            classifier, sonnet, compactor, history, memory, soul_ref, project_context, task_db, &cfg, tx, false,
                         ).await?;
                         history.push(Message { role: "assistant".into(), content: strip_think_tags(&strip_tool_log(&repair_text)) });
                         all_memory_ops.extend(repair_ops);
@@ -532,6 +537,7 @@ pub async fn run_agent_turn(
     task_db: &Arc<TaskDb>,
     cfg: &TurnConfig,
     tx: &mpsc::UnboundedSender<AgentEvent>,
+    all_cheap: bool,
 ) -> Result<(String, Vec<MemoryOp>, bool)> {
     // Build active tasks summary (kept compact)
     let tasks_summary = match task_db.list_active_tasks() {
@@ -727,7 +733,9 @@ pub async fn run_agent_turn(
 
         let active_sonnet = if using_fallback {
             fallback_client.as_ref().unwrap_or(sonnet)
-        } else if last_was_tool {
+        } else if last_was_tool || all_cheap {
+            // all_cheap: task was classified Simple or mode=="simple" — use continuation
+            // model for every call, including the first, to save cost without quality loss.
             continuation_client.as_ref().unwrap_or(sonnet)
         } else {
             sonnet
@@ -1210,6 +1218,56 @@ pub async fn run_agent_turn(
             "role": "user",
             "content": tool_results,
         }));
+
+        // --- Mid-turn compaction ---
+        // If api_msgs has grown beyond the compaction threshold within this turn's tool loop,
+        // compact the older portion now rather than waiting for the next turn boundary.
+        let midturn_token_est: usize = 6000 + api_msgs.iter()
+            .map(|m| m.to_string().len() / 3 + 4)
+            .sum::<usize>();
+        if midturn_token_est > compact_threshold && api_msgs.len() > 4 {
+            info!(tokens = midturn_token_est, threshold = compact_threshold, "Mid-turn compaction triggered");
+            let target_pct = pct.saturating_sub(20).max(10);
+            let avg = (midturn_token_est.saturating_sub(6000)) / api_msgs.len();
+            let keep = if avg > 0 {
+                (cfg.token_limit * target_pct / 100 / avg).max(3)
+            } else {
+                api_msgs.len()
+            };
+            let mut split = api_msgs.len().saturating_sub(keep);
+            // Walk forward to land on an assistant message so `recent` starts there —
+            // avoids placing two consecutive user messages at the split boundary.
+            while split < api_msgs.len() && api_msgs[split]["role"].as_str() != Some("assistant") {
+                split += 1;
+            }
+            if split > 0 && split < api_msgs.len() {
+                let old_as_messages: Vec<Message> = api_msgs[..split].iter().map(|m| {
+                    let role = m["role"].as_str().unwrap_or("user").to_string();
+                    let content = extract_text_from_api_msg(m);
+                    Message { role, content }
+                }).collect();
+                let recent = api_msgs[split..].to_vec();
+                match compactor.compact(&old_as_messages).await {
+                    Ok(summary) => {
+                        let summary_msg = format!("[Mid-turn context summary]\n{}", summary);
+                        api_msgs.clear();
+                        api_msgs.push(serde_json::json!({"role": "user", "content": summary_msg}));
+                        api_msgs.extend(recent);
+                        info!(new_len = api_msgs.len(), "Mid-turn compaction complete");
+                        let _ = tx.send(AgentEvent::ToolOutput {
+                            name: "🗜 context".into(),
+                            stdout: "Mid-turn context compacted to stay within token budget.".into(),
+                            stderr: String::new(),
+                            code: 0,
+                        });
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Mid-turn compaction failed — continuing with full context");
+                    }
+                }
+            }
+        }
+
         last_was_tool = true; // next call is a continuation → use cheaper model
     }
 
@@ -2246,7 +2304,7 @@ fn run_subagent_task<'a>(
     );
     let sub_compactor = super::compactor::Compactor::new(
         &cfg.anthropic_key, &cfg.openai_key,
-        &cfg.primary_model, &cfg.primary_provider,
+        &cfg.compactor_model, &cfg.compactor_provider,
         Arc::clone(&cfg.http),
     );
 
@@ -2291,7 +2349,7 @@ fn run_subagent_task<'a>(
     match run_agent_turn(
         &sub_classifier, &sub_sonnet, &sub_compactor,
         &mut sub_history, &sub_memory, sub_soul, "",
-        task_db, &sub_cfg, &sub_tx,
+        task_db, &sub_cfg, &sub_tx, false,
     ).await {
         Ok((output, _memory_ops, _compacted)) => {
             drop(sub_tx); // close channel so bridge drains and exits
@@ -2530,6 +2588,38 @@ pub(crate) fn strip_think_tags(s: &str) -> String {
     // Return empty string — the caller decides how to handle it. Do NOT return the raw
     // tagged text, which would leak <think> blocks into history or the UI.
     trimmed
+}
+
+/// Extract a human-readable text summary from a single `api_msgs` entry.
+/// Handles both plain string content and block arrays (text, tool_use, tool_result, thinking).
+fn extract_text_from_api_msg(m: &serde_json::Value) -> String {
+    match m["content"].as_array() {
+        Some(blocks) => blocks.iter().filter_map(|b| {
+            match b["type"].as_str().unwrap_or("") {
+                "text" => {
+                    let t = b["text"].as_str().unwrap_or("");
+                    if t.is_empty() { None } else { Some(t.to_string()) }
+                }
+                "thinking" => None, // skip — too noisy
+                "tool_use" => Some(format!(
+                    "[tool_call: {}({})]",
+                    b["name"].as_str().unwrap_or("?"),
+                    b["input"].to_string()
+                )),
+                "tool_result" => {
+                    let content = if let Some(arr) = b["content"].as_array() {
+                        arr.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")
+                    } else {
+                        b["content"].as_str().unwrap_or("").to_string()
+                    };
+                    let truncated = &content[..content.len().min(300)];
+                    Some(format!("[tool_result: {}]", truncated))
+                }
+                _ => None,
+            }
+        }).collect::<Vec<_>>().join("\n"),
+        None => m["content"].as_str().unwrap_or("").to_string(),
+    }
 }
 
 /// Compress <tool_log>...</tool_log> into a compact <tool_trace> for history.

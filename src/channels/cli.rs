@@ -11,6 +11,73 @@ use crate::agent::Message;
 use crate::memory::store::Memory;
 use crate::tui::server::AppState;
 
+/// Filter streaming chunks, hiding `<think>…</think>` blocks.
+/// Maintains state across chunk boundaries via `in_think`, `buf`, `post_think`.
+fn filter_think(chunk: &str, in_think: &mut bool, buf: &mut String, post_think: &mut bool) -> String {
+    const OPEN: &str = "<think>";
+    const CLOSE: &str = "</think>";
+    buf.push_str(chunk);
+    let mut out = String::new();
+    loop {
+        if *in_think {
+            match buf.find(CLOSE) {
+                Some(pos) => {
+                    *in_think = false;
+                    *post_think = true;
+                    buf.drain(..pos + CLOSE.len());
+                }
+                None => {
+                    if buf.len() > CLOSE.len() - 1 {
+                        buf.drain(..buf.len() - (CLOSE.len() - 1));
+                    }
+                    break;
+                }
+            }
+        } else {
+            match buf.find(OPEN) {
+                Some(pos) => {
+                    if pos > 0 {
+                        if *post_think { out.push_str("\n\n"); *post_think = false; }
+                        out.push_str(&buf[..pos]);
+                    }
+                    *in_think = true;
+                    buf.drain(..pos + OPEN.len());
+                }
+                None => {
+                    let safe = if buf.len() >= OPEN.len() { buf.len() - (OPEN.len() - 1) } else { 0 };
+                    if safe > 0 {
+                        if *post_think { out.push_str("\n\n"); *post_think = false; }
+                        out.push_str(&buf[..safe]);
+                        buf.drain(..safe);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Strip all `<think>…</think>` blocks from completed text (for DB storage).
+fn strip_think(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    loop {
+        match rest.find("<think>") {
+            None => { out.push_str(rest); break; }
+            Some(start) => {
+                out.push_str(&rest[..start]);
+                let after_open = &rest[start + "<think>".len()..];
+                match after_open.find("</think>") {
+                    None => break,
+                    Some(end) => { rest = &after_open[end + "</think>".len()..]; }
+                }
+            }
+        }
+    }
+    out.trim_start_matches('\n').to_string()
+}
+
 /// Run an interactive CLI REPL that talks to the agent via stdin/stdout.
 pub async fn run(state: Arc<AppState>) {
     let session_id = match state.chat_db.find_or_create_session("cli") {
@@ -68,6 +135,9 @@ pub async fn run(state: Arc<AppState>) {
 
         // Build agent components from config
         let sudo_pw = state.sudo_password.read().await.clone();
+        let sudo_note = if !sudo_pw.is_empty() {
+            "\n\n## Sudo Access\nA sudo password is configured. When commands need elevated privileges, use `sudo` in run_command — the password is injected automatically and transparently. NEVER ask the user for their password."
+        } else { "" };
         let (sonnet, compactor, classifier, soul, turn_cfg, project_ctx, memory_file) = {
             let cfg = state.config.read().await;
             let wd = &cfg.settings.working_directory;
@@ -124,6 +194,8 @@ pub async fn run(state: Arc<AppState>) {
                     classifier_provider: cfg.models.classifier_provider.clone(),
                     review_model: cfg.models.review.clone(),
                     review_provider: cfg.models.review_provider.clone(),
+                    compactor_model: cfg.models.compactor.clone(),
+                    compactor_provider: cfg.models.compactor_provider.clone(),
                     mode: "supercharge".to_string(),
                     plugin_manager: Some(Arc::clone(&state.plugin_manager)),
                     compaction_threshold: cfg.settings.compaction_threshold,
@@ -164,8 +236,8 @@ pub async fn run(state: Arc<AppState>) {
             - Your turn is NOT complete until you have called ALL necessary tools and delivered the final result.\n\
             - Think of each response as: plan (brief) → tool calls → result summary. Never stop at \"plan\".\n\n\
             ## Channel\n\
-            You are responding via CLI terminal. Keep responses focused and use plain text or minimal formatting.",
-            soul, turn_cfg.working_directory
+            You are responding via CLI terminal. Keep responses focused and use plain text or minimal formatting.{sudo_note}",
+            soul, turn_cfg.working_directory, sudo_note = sudo_note
         );
 
         let memory = crate::memory::store::load_memory(&memory_file)
@@ -222,6 +294,9 @@ pub async fn run(state: Arc<AppState>) {
         // Drain events — stream text to stdout in real time
         let mut response_text = String::new();
         let mut streaming = false;
+        let mut in_think = false;
+        let mut think_buf = String::new();
+        let mut post_think = false;
 
         while let Some(event) = rx.recv().await {
             match event {
@@ -229,8 +304,11 @@ pub async fn run(state: Arc<AppState>) {
                     if !streaming {
                         streaming = true;
                     }
-                    print!("{}", chunk);
-                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                    let visible = filter_think(&chunk, &mut in_think, &mut think_buf, &mut post_think);
+                    if !visible.is_empty() {
+                        print!("{}", visible);
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    }
                     response_text.push_str(&chunk);
                 }
                 AgentEvent::Text(text) => {
@@ -265,18 +343,28 @@ pub async fn run(state: Arc<AppState>) {
                 AgentEvent::Error(e) => {
                     eprintln!("\x1b[31mError: {}\x1b[0m", e);
                 }
-                AgentEvent::Done => break,
+                AgentEvent::Done => {
+                    // Flush any buffered text that didn't contain a complete tag
+                    if !think_buf.is_empty() && !in_think {
+                        if post_think { print!("\n\n"); }
+                        print!("{}", think_buf);
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                        think_buf.clear();
+                    }
+                    break;
+                }
                 _ => {}
             }
         }
 
         // Wait for agent to finish
         if let Ok(Some((final_text, compacted_hist))) = agent_handle.await {
-            if !final_text.is_empty() && !streaming {
-                print!("{}", final_text);
-                response_text = final_text;
-            } else if !final_text.is_empty() {
-                response_text = final_text;
+            let final_stripped = strip_think(&final_text);
+            if !final_stripped.is_empty() && !streaming {
+                print!("{}", final_stripped);
+                response_text = final_stripped;
+            } else if !final_stripped.is_empty() {
+                response_text = final_stripped;
             }
             if let Some(compacted) = compacted_hist {
                 let tuples: Vec<(String, String)> = compacted.iter()
@@ -292,7 +380,7 @@ pub async fn run(state: Arc<AppState>) {
         // Save to DB
         let _ = state.chat_db.save_message(&session_id, "user", text);
         if !response_text.is_empty() {
-            let _ = state.chat_db.save_message(&session_id, "assistant", &response_text);
+            let _ = state.chat_db.save_message(&session_id, "assistant", &strip_think(&response_text));
         }
     }
 

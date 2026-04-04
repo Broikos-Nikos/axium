@@ -563,6 +563,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
             // Truncate user input if over limit, read config once, and build agent
             let sudo_pw = state.sudo_password.read().await.clone();
+            let sudo_note = if !sudo_pw.is_empty() {
+                "\n\n## Sudo Access\nA sudo password is configured. When commands need elevated privileges, use `sudo` in run_command — the password is injected automatically and transparently. NEVER ask the user for their password."
+            } else { "" };
             let (user_text, sonnet, compactor, classifier, memory_path, soul, turn_cfg, project_ctx, memory_file) = {
                 let cfg = state.config.read().await;
                 let max = cfg.settings.max_input_chars;
@@ -635,6 +638,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         classifier_provider: cfg.models.classifier_provider.clone(),
                         review_model: cfg.models.review.clone(),
                         review_provider: cfg.models.review_provider.clone(),
+                        compactor_model: cfg.models.compactor.clone(),
+                        compactor_provider: cfg.models.compactor_provider.clone(),
                         mode: mode.clone(),
                         plugin_manager: Some(Arc::clone(&state.plugin_manager)),
                         compaction_threshold: cfg.settings.compaction_threshold,
@@ -721,8 +726,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 If you have enough context to proceed without asking, just do it.\n\n\
                 ## Response Style\n\
                 Keep answers concise. Bullet points over paragraphs. No preambles (\"Sure!\", \"Of course!\", \"Great question!\"). \
-                For tasks: act first, give a brief summary after. Omit obvious filler.",
-                soul, turn_cfg.working_directory
+                For tasks: act first, give a brief summary after. Omit obvious filler.{sudo_note}",
+                soul, turn_cfg.working_directory, sudo_note = sudo_note
             );
 
             // Spawn agent work

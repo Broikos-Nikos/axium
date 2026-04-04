@@ -277,6 +277,9 @@ impl TelegramBot {
 
         // Build agent components from config
         let sudo_pw = self.state.sudo_password.read().await.clone();
+        let sudo_note = if !sudo_pw.is_empty() {
+            "\n\n## Sudo Access\nA sudo password is configured. When commands need elevated privileges, use `sudo` in run_command — the password is injected automatically and transparently. NEVER ask the user for their password."
+        } else { "" };
         let (sonnet, compactor, classifier, soul, turn_cfg, project_ctx, memory_file) = {
             let cfg = self.state.config.read().await;
             let wd = &cfg.settings.working_directory;
@@ -340,6 +343,8 @@ impl TelegramBot {
                     classifier_provider: cfg.models.classifier_provider.clone(),
                     review_model: cfg.models.review.clone(),
                     review_provider: cfg.models.review_provider.clone(),
+                    compactor_model: cfg.models.compactor.clone(),
+                    compactor_provider: cfg.models.compactor_provider.clone(),
                     mode: "supercharge".to_string(),
                     plugin_manager: Some(Arc::clone(&self.state.plugin_manager)),
                     compaction_threshold: cfg.settings.compaction_threshold,
@@ -381,8 +386,8 @@ impl TelegramBot {
             - Think of each response as: plan (brief) → tool calls → result summary. Never stop at \"plan\".\n\n\
             ## Channel\n\
             You are responding via Telegram. Keep responses concise — Telegram has a 4096 char limit per message. \
-            Avoid excessive markdown formatting. Use plain text or minimal formatting.",
-            soul, turn_cfg.working_directory
+            Avoid excessive markdown formatting. Use plain text or minimal formatting.{sudo_note}",
+            soul, turn_cfg.working_directory, sudo_note = sudo_note
         );
 
         let memory = crate::memory::store::load_memory(&memory_file)
