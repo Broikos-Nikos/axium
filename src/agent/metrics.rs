@@ -1,8 +1,8 @@
 //! Per-turn instrumentation: token counts, cost, tool histogram, wall time.
 //!
 //! The Python build has had this since its first benchmark. The Rust build
-//! reported nothing at a turn boundary — `sonnet.rs` collected `ApiUsage` per
-//! API call and then dropped it — so there was no way to price a Rust turn, and
+//! reported nothing at a turn boundary, `sonnet.rs` collected `ApiUsage` per
+//! API call and then dropped it, so there was no way to price a Rust turn, and
 //! a cost comparison between the two implementations would have been fiction.
 //!
 //! The `Meter` is threaded through the turn and every call and tool is recorded
@@ -54,7 +54,7 @@ pub fn is_priced(model: &str) -> bool {
 /// USD cost of one call. Returns 0.0 for a model with no pricing row.
 ///
 /// An unpriced model still runs but reports `$0.0000`, which silently corrupts
-/// every cost comparison — hence `Meter::unpriced_models()`, so a caller can
+/// every cost comparison, hence `Meter::unpriced_models()`, so a caller can
 /// notice rather than trust a suspiciously cheap number.
 pub fn cost_usd(
     model: &str,
@@ -115,7 +115,7 @@ pub struct RoleTotals {
 ///
 /// Field names and shape match `python/axium/metrics.py::Meter.totals()`
 /// exactly. `bench.report` reads rows by key, and a Rust row spelled differently
-/// would either crash the report or — worse — read as zero and look free.
+/// would either crash the report or, worse, read as zero and look free.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct TurnMetrics {
     pub llm_calls: usize,
@@ -440,7 +440,7 @@ mod parity_tests {
     /// difference would be a pricing-table difference, not an agent difference.
     ///
     /// The expected values are the output of `python/axium/pricing.py` on the
-    /// same inputs, captured rather than re-derived — deriving them here from
+    /// same inputs, captured rather than re-derived, deriving them here from
     /// the same table this file defines would prove nothing.
     #[test]
     fn pricing_matches_the_python_implementation() {

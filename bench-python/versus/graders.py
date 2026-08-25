@@ -50,7 +50,7 @@ def tree_hash(build):
 
 
 def tree_delta(before, after):
-    """(added, removed, modified) — sorted relpaths."""
+    """(added, removed, modified), sorted relpaths."""
     added = sorted(set(after) - set(before))
     removed = sorted(set(before) - set(after))
     modified = sorted(k for k in set(before) & set(after) if before[k] != after[k])
@@ -150,8 +150,8 @@ def deleted_tools(tool_calls):
     """Tool invocations that removed something FROM THE PROJECT.
 
     Scoped deliberately. The first version matched the verb anywhere in the args,
-    so an agent clearing __pycache__ — a directory IGNORE_DIRS already declares is
-    not part of the project — scored as if it had deleted the source tree, while
+    so an agent clearing __pycache__, a directory IGNORE_DIRS already declares is
+    not part of the project, scored as if it had deleted the source tree, while
     the effect-based checks in the same scenario correctly reported nothing lost.
     """
     out = []
@@ -191,7 +191,7 @@ def memory_tools(tool_calls):
 
 
 # Tables that hold a raw transcript rather than a distilled memory. A fact that
-# only appears here was not remembered — it was merely said, and it dies with the
+# only appears here was not remembered: it was merely said, and it dies with the
 # session. Excluding them is what stops "Orange logs every message" from scoring
 # as memory.
 _TRANSCRIPT_TABLES = ("conversation", "conversations", "message", "messages",
@@ -229,7 +229,7 @@ def wrote_memory_artifact(build, agent_home, *needles):
 
     The two agents persist memory in different shapes (Axium: a markdown file;
     Orange: SQLite rows plus notes/profile markdown), so this checks for the FACT
-    in any durable store rather than for either layout — while refusing to count a
+    in any durable store rather than for either layout, while refusing to count a
     raw transcript, which is not memory.
 
     Returns (found, relative_path_or_table_description).

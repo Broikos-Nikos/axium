@@ -1,22 +1,22 @@
-# AXIUM — Autonomous Linux Assistant
+# AXIUM, Autonomous Linux Assistant
 
 ## Overview
 
 **Axium** (`axiom` binary) is a local-first autonomous Linux assistant written in Rust. It runs on your machine at `http://127.0.0.1:3000` with a WebSocket-based web UI. The primary reasoning model is **Claude Sonnet** (or any Anthropic/OpenAI model). Secondary models handle classification, history compaction, and post-turn code review.
 
-Axium is designed for autonomy — it classifies prompts, plans before acting, self-corrects on errors, executes tools in parallel, manages background tasks, and persists all state across restarts.
+Axium is designed for autonomy, it classifies prompts, plans before acting, self-corrects on errors, executes tools in parallel, manages background tasks, and persists all state across restarts.
 
 ---
 
 ## Core Principles
 
-1. **Local-only** — no cloud state, no external databases. SQLite + markdown on disk. Binds to `127.0.0.1` only.
-2. **Secure by default** — WebSocket handler rejects any non-loopback IP with HTTP 403. API keys stay in `config.json`.
-3. **Autonomous** — classifies complexity, plans before acting, self-corrects on failures, supports unattended background task execution.
-4. **Minimal tokens** — compresses history aggressively, truncates tool outputs, summarizes large results.
-5. **Full system access** — terminal commands, file operations, git, web fetching, background processes, email, Telegram.
-6. **Persistent memory** — `memory.md` + SQLite chat history + task queue survive restarts.
-7. **Transparent execution** — plans, tool calls, outputs, and streamed responses are visible in real time.
+1. **Local-only**, no cloud state, no external databases. SQLite + markdown on disk. Binds to `127.0.0.1` only.
+2. **Secure by default**, WebSocket handler rejects any non-loopback IP with HTTP 403. API keys stay in `config.json`.
+3. **Autonomous**, classifies complexity, plans before acting, self-corrects on failures, supports unattended background task execution.
+4. **Minimal tokens**, compresses history aggressively, truncates tool outputs, summarizes large results.
+5. **Full system access**, terminal commands, file operations, git, web fetching, background processes, email, Telegram.
+6. **Persistent memory**, `memory.md` + SQLite chat history + task queue survive restarts.
+7. **Transparent execution**, plans, tool calls, outputs, and streamed responses are visible in real time.
 
 ---
 
@@ -47,11 +47,11 @@ Axium is designed for autonomy — it classifies prompts, plans before acting, s
              ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │                    Classifier (classifier.rs)                          │
-│  1. analyze_skills()  — pick relevant axium-skills/ folders          │
-│  2. quick_classify()  — regex fast-path (trivial / greeting / etc.)  │
-│  3. classify()        — LLM classification (OpenAI)                  │
+│  1. analyze_skills(): pick relevant axium-skills/ folders          │
+│  2. quick_classify(), regex fast-path (trivial / greeting / etc.)  │
+│  3. classify(), LLM classification (OpenAI)                  │
 │     → Trivial / Simple / Long / Code / Task / Research / ...        │
-│  4. CodeReviewer      — post-turn git diff → LLM review + test gen  │
+│  4. CodeReviewer, post-turn git diff → LLM review + test gen  │
 └────────────┬─────────────────────────────────────────────────────────┘
              │ mode: simple | supercharge | skills
              ▼
@@ -169,9 +169,9 @@ assistant/
     │   └── store.rs           # Read/write/append to memory.md
     ├── config/
     │   └── loader.rs          # load_soul() (hot-reload), Config struct, TurnConfig
-    ├── worker.rs              # Background task worker — polls every 4s, claims pending
+    ├── worker.rs              # Background task worker, polls every 4s, claims pending
     │                          # tasks, runs full agent turn, broadcasts result via WS
-    └── watcher.rs             # File watcher (notify v6) — broadcasts diagnostics via
+    └── watcher.rs             # File watcher (notify v6), broadcasts diagnostics via
                                # broadcast_tx on source file changes
 ```
 
@@ -280,15 +280,15 @@ Results are cached in `.axium/architecture_cache.json` per-file by mtime. The ag
 ```
 [ARCHITECTURE]
   agent/
-    router.rs [2554L] — fn run_agent_turn→AgentEvent; fn classify_and_run; …
-    sonnet.rs [902L]  — struct SonnetClient{}; fn build_tools→Vec<Tool>
+    router.rs [2554L], fn run_agent_turn→AgentEvent; fn classify_and_run; …
+    sonnet.rs [902L], struct SonnetClient{}; fn build_tools→Vec<Tool>
   tools/
-    project.rs [545L] — fn build_project_context→String; fn scan_project→String
+    project.rs [545L], fn build_project_context→String; fn scan_project→String
 ```
 
 `get_dependency_graph` parses `use crate::` statements to build a bidirectional file import map, answering "who imports this file" or "what does this file import".
 
-`rename_symbol` uses `rust-analyzer parse` to extract COMMENT and STRING byte ranges as dead zones — replacements skip those ranges to avoid corrupting comments and string literals.
+`rename_symbol` uses `rust-analyzer parse` to extract COMMENT and STRING byte ranges as dead zones, replacements skip those ranges to avoid corrupting comments and string literals.
 
 ---
 
@@ -365,7 +365,7 @@ After any turn that modifies files, `CodeReviewer` in `classifier.rs` runs a `gi
 | `axum` | Web framework + WebSocket |
 | `reqwest` | HTTP client for LLM APIs and URL fetching (rustls) |
 | `serde` / `serde_json` | JSON serialization |
-| `rusqlite` | SQLite (bundled) — chat history + task queue |
+| `rusqlite` | SQLite (bundled), chat history + task queue |
 | `lettre` | SMTP email (tokio + rustls) |
 | `notify` | File system watcher (v6) |
 | `tracing` + `tracing-subscriber` | Structured logging with env filter |
@@ -399,4 +399,4 @@ sudo bash setup.sh --rebuild
 
 Set log level: `RUST_LOG=axiom=debug cargo run --release`
 
-Graceful shutdown: Ctrl+C or SIGTERM — waits for in-flight requests.
+Graceful shutdown: Ctrl+C or SIGTERM, waits for in-flight requests.

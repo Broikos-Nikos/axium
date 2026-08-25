@@ -110,7 +110,7 @@ fn cap_output(text: String) -> String {
     if text.len() > 8000 {
         let mut b = 8000;
         while b > 0 && !text.is_char_boundary(b) { b -= 1; }
-        format!("{}\n\n[Truncated — {} chars total]", &text[..b], text.len())
+        format!("{}\n\n[Truncated, {} chars total]", &text[..b], text.len())
     } else {
         text
     }

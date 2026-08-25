@@ -1,7 +1,7 @@
 //! Session trajectory + opportunistic skill distillation.
 //!
 //! Every turn's (request, tools, outcome) is appended to a per-session JSONL
-//! trace. That is useful on its own — "what did this agent actually do today" —
+//! trace. That is useful on its own, "what did this agent actually do today",
 //! and it is the raw material for the part that compounds: after a substantive
 //! multi-step session, a gated pass distills the trace into a named skill under
 //! `axium-skills/`, so a workflow performed once can be selected by name the next
@@ -70,7 +70,7 @@ fn now_ts() -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Truncate on a char boundary — byte-slicing a Greek or emoji value panics.
+/// Truncate on a char boundary, byte-slicing a Greek or emoji value panics.
 fn truncate_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()

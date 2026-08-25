@@ -1,4 +1,4 @@
-r"""Turn-level checkpoints — revert a whole turn's file changes in one call.
+r"""Turn-level checkpoints, revert a whole turn's file changes in one call.
 
 The blast-radius benchmark asks an agent to delete things, then to put them back
 "exactly". Axium scored the recovery but spent 47 tool calls doing it: it re-read

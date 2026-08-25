@@ -3,7 +3,7 @@
 A Python implementation of the Rust agent in `../src`, plus a 20-scenario
 benchmark that measures it. Same tool names, same
 `classify → tool-loop → heartbeat → review` pipeline, same cost routing between a
-primary and a cheap continuation model — so numbers measured here describe the
+primary and a cheap continuation model, so numbers measured here describe the
 architecture, not just this port.
 
 It exists because the Rust build needs a C toolchain (bundled SQLite) that this
@@ -74,7 +74,7 @@ DeepSeek gets a nested `thinking` object, Anthropic gets adaptive thinking, and
 OpenAI gets `reasoning_effort` only on the model families that accept it.
 
 DeepSeek takes both a nested `thinking` object and a flat `reasoning_effort`
-field. This uses the nested form because only that one produces a real gradient —
+field. This uses the nested form because only that one produces a real gradient,
 measured on `deepseek-v4-flash`, reasoning tokens ran low=33 / high=53 / max=58
 where the flat field barely moved. It is also the shape the sibling **orange**
 project sends, so both agents put identical bytes on the wire and their benchmark
@@ -107,10 +107,10 @@ of a seed project:
 
 Two axes are scored separately:
 
-- **change** — did it do the task? Graded by importing the agent's code in a fresh
+- **change**: did it do the task? Graded by importing the agent's code in a fresh
   subprocess and asserting on real outputs. Code that looks right but does not run
   scores zero.
-- **regress** — is everything that already worked still working? A 16-check
+- **regress**: is everything that already worked still working? A 16-check
   acceptance suite that is green on the pristine seed, so any red is agent damage.
 
 ```

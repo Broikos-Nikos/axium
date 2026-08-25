@@ -18,7 +18,7 @@ struct ArchCacheEntry {
 }
 
 /// Build a compact project context string for the system prompt.
-/// Keeps it small to avoid burning tokens — just the essentials.
+/// Keeps it small to avoid burning tokens, just the essentials.
 pub fn build_project_context(working_dir: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
 
@@ -324,7 +324,7 @@ fn build_architecture_map(working_dir: &str) -> String {
 
     if entries.is_empty() { return String::new(); }
 
-    // Format flat lines: "  rel/path.rs [NL] — symbols"
+    // Format flat lines: "  rel/path.rs [NL], symbols"
     let mut out = String::new();
     for (rel, line_count, symbols) in &entries {
         let indent = "  ".repeat(rel.matches('/').count() + 1);
@@ -334,7 +334,7 @@ fn build_architecture_map(working_dir: &str) -> String {
         } else {
             let syms = crate::agent::router::truncate_for_report(symbols, 100);
             let syms = syms.as_str();
-            out.push_str(&format!("{}{}  [{}L] — {}\n", indent, fname, line_count, syms));
+            out.push_str(&format!("{}{}  [{}L], {}\n", indent, fname, line_count, syms));
         }
         if out.len() > 2000 {
             out.push_str("  ...\n");
@@ -385,7 +385,7 @@ fn collect_arch_entries(
                 }
             }
 
-            // Cache miss — read file and extract symbols
+            // Cache miss: read file and extract symbols
             let content = match std::fs::read_to_string(&path) {
                 Ok(c) => c, Err(_) => continue,
             };

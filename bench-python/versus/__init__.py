@@ -1,4 +1,4 @@
-"""Axium vs Orange — one benchmark, two agents, identical work.
+"""Axium vs Orange, one benchmark, two agents, identical work.
 
 `bench/` measures Axium against itself (model A vs model B). This package measures
 Axium against Orange: two differently-designed agents driven through the SAME five

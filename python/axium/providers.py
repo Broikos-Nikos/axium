@@ -1,4 +1,4 @@
-"""LLM provider adapters — DeepSeek, OpenAI, Anthropic.
+"""LLM provider adapters, DeepSeek, OpenAI, Anthropic.
 
 Every adapter returns the SAME normalized shape, modelled on Anthropic's content
 blocks (the Rust build does the same, so the agent loop is provider-agnostic):
@@ -18,7 +18,7 @@ Reasoning/thinking deltas are wrapped in <think>...</think> so a single filter i
 the CLI handles DeepSeek's `reasoning_content` and Anthropic's thinking blocks
 identically.
 
-A failed call NEVER raises past `call()` — it returns a result with `error` set
+A failed call NEVER raises past `call()`, it returns a result with `error` set
 and empty content, so a benchmark records the failure instead of dying mid-run.
 """
 import json
@@ -116,7 +116,7 @@ def to_openai_messages(system, messages):
 # say "max" once and mean it everywhere.
 #
 # DeepSeek V4 takes a nested `thinking` object, not a top-level reasoning_effort.
-# Both are accepted by the API, but only the nested form gives a real gradient —
+# Both are accepted by the API, but only the nested form gives a real gradient,
 # measured on deepseek-v4-flash, reasoning tokens went low=33 / high=53 / max=58,
 # where the flat field barely moved. This is also the shape the orange project
 # already sends, so both agents put identical bytes on the wire and their

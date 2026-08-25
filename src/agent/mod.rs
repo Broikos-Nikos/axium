@@ -44,7 +44,7 @@ pub fn estimate_tokens(messages: &[Message]) -> usize {
 pub enum Provider {
     Anthropic,
     OpenAI,
-    /// DeepSeek — OpenAI-compatible wire format, different base URL and key.
+    /// DeepSeek, OpenAI-compatible wire format, different base URL and key.
     DeepSeek,
 }
 

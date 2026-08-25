@@ -3,13 +3,13 @@
 `bench-rust/` drives the Rust binary through the *same* scenarios as
 `bench-python/`. If each project kept its own copy, a scenario added to one would
 quietly not exist in the other, and the two suites would drift into measuring
-different things while still looking comparable — which is worse than not
+different things while still looking comparable, which is worse than not
 comparing at all.
 
 So the Python definitions are the single source and this exports them. The
 graders are *not* exported: they are Python that imports the agent's output code
 and executes it, so `bench-rust` shells out to them rather than reimplementing
-them. What crosses the boundary is the part that must match exactly — the ids,
+them. What crosses the boundary is the part that must match exactly, the ids,
 the prompts, and the turn text.
 
     python export_scenarios.py            # writes ../scenarios.json
@@ -68,8 +68,8 @@ def export():
             "id": s["id"],
             "name": s["name"],
             "axis": s["axis"],
-            # Turn text is deliberately agent-neutral — no tool names, no
-            # framework vocabulary — so the same words can be handed to either
+            # Turn text is deliberately agent-neutral, no tool names, no
+            # framework vocabulary, so the same words can be handed to either
             # implementation without favouring one.
             "turns": [t["text"] for t in s["turns"]],
             "grader": _grader_name(s.get("grade")),
@@ -98,12 +98,12 @@ def main():
 
     if args.check:
         if not os.path.exists(args.out):
-            print(f"MISSING {args.out} — run: python export_scenarios.py")
+            print(f"MISSING {args.out}: run: python export_scenarios.py")
             return 1
         with open(args.out, encoding="utf-8") as f:
             current = f.read()
         if current != text:
-            print(f"STALE {args.out} — a scenario changed but was not re-exported.\n"
+            print(f"STALE {args.out}: a scenario changed but was not re-exported.\n"
                   f"      bench-python and bench-rust are measuring different things.\n"
                   f"      fix: python export_scenarios.py")
             return 1

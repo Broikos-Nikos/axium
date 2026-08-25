@@ -1,7 +1,7 @@
 """SQLite conversation history (with FTS5 full-text search) and task queue.
 
 Matches the Rust build's tables closely enough that `search_history` behaves the
-same in both. FTS5 is optional — if the local SQLite lacks it, search degrades to
+same in both. FTS5 is optional, if the local SQLite lacks it, search degrades to
 LIKE instead of failing.
 """
 import os

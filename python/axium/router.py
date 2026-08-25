@@ -44,7 +44,7 @@ different approach rather than repeating the call. Use independent tools in the 
 You are an EXECUTION agent, not a narration agent.
 - When a task needs a file written or a command run, emit the tool call IMMEDIATELY.
 - NEVER say "I'll write the file now" and then end your turn. Decide and call in the same response.
-- Do NOT print code in markdown blocks — use write_file or patch_file to put it on disk.
+- Do NOT print code in markdown blocks: use write_file or patch_file to put it on disk.
 - Your turn is not complete until every necessary tool has been called and the result delivered.
 
 ## Persistent Memory
@@ -85,7 +85,7 @@ class Turn:
         self.history = history or []
         self.compacted = compacted
         self.asked = asked or []
-        # What the turn learned and what steered it — the benchmark grades memory
+        # What the turn learned and what steered it, the benchmark grades memory
         # and routing directly rather than inferring them from the prose.
         self.facts_learned = facts_learned or []
         self.plan = plan
@@ -435,7 +435,7 @@ class Agent:
                 final_text = text.strip()
 
             if not calls:
-                # No tools and no text is a dead turn — nudge, then accept.
+                # No tools and no text is a dead turn, nudge, then accept.
                 if not text.strip() and nudges < MAX_NUDGES:
                     nudges += 1
                     meter.bump("empty_response_nudges")
@@ -526,7 +526,7 @@ def run_once(cfg, message, workdir=None, memory=None, db=None, on_event=None,
 
 
 def describe_routing(cfg):
-    """Human-readable model plan — printed at CLI start and in bench headers."""
+    """Human-readable model plan, printed at CLI start and in bench headers."""
     m = cfg.models
     hi, lo = cfg.settings.thinking_effort, cfg.settings.cheap_effort
     s = cfg.settings

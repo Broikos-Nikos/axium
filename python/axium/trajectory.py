@@ -1,7 +1,7 @@
 r"""Session trajectory + opportunistic skill distillation.
 
 Every turn's (request, tools, outcome) is appended to a per-session JSONL trace.
-That is useful on its own — "what did this agent actually do today" — and it is
+That is useful on its own, "what did this agent actually do today", and it is
 the raw material for the part that compounds: after a substantive multi-step
 session, a gated background pass distills the trace into a named skill under
 `axium-skills/`, so a workflow performed once can be selected by name the next
@@ -98,7 +98,7 @@ class Trajectory:
 
 
 def parse_skill(raw):
-    """Parse the distiller's JSON. Returns None when it declined or produced junk —
+    """Parse the distiller's JSON. Returns None when it declined or produced junk:
     a malformed distillation must be dropped, never written half-formed."""
     text = (raw or "").strip()
     if not text:

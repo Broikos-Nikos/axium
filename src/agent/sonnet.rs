@@ -170,7 +170,7 @@ pub(crate) fn build_tools() -> Vec<Tool> {
             },
             Tool {
                 name: "append_file".into(),
-                description: "Append content to a file without overwriting it. Useful for adding lines to configs, logs, CSS, or any file where you only need to add — not replace. Use `after` to insert after a specific marker line instead of at the end.".into(),
+                description: "Append content to a file without overwriting it. Useful for adding lines to configs, logs, CSS, or any file where you only need to add, not replace. Use `after` to insert after a specific marker line instead of at the end.".into(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -223,7 +223,7 @@ pub(crate) fn build_tools() -> Vec<Tool> {
             },
             Tool {
                 name: "scan_project".into(),
-                description: "Build an annotated file-tree of a project directory. Returns a tree view with top-level symbols extracted from each source file (functions, classes, structs, etc.). Use this at the start of a coding task to understand what files exist and what they contain — much faster than calling list_directory + read_file on every file.".into(),
+                description: "Build an annotated file-tree of a project directory. Returns a tree view with top-level symbols extracted from each source file (functions, classes, structs, etc.). Use this at the start of a coding task to understand what files exist and what they contain, much faster than calling list_directory + read_file on every file.".into(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -319,7 +319,7 @@ pub(crate) fn build_tools() -> Vec<Tool> {
             },
             Tool {
                 name: "send_email".into(),
-                description: "Send an email to someone. Just provide the recipient, subject, and body — the system handles delivery.".into(),
+                description: "Send an email to someone. Just provide the recipient, subject, and body, the system handles delivery.".into(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -345,12 +345,12 @@ pub(crate) fn build_tools() -> Vec<Tool> {
             },
             Tool {
                 name: "run_subagent".into(),
-                description: "Delegate a self-contained sub-task to a fresh agent instance. The sub-agent starts with no conversation history or memory — only the task you provide. Use this for isolated, parallel-style work where you want a clean slate (e.g. research a topic, process a file, write a component). The result is returned as a string. Subagents cannot spawn further subagents.".into(),
+                description: "Delegate a self-contained sub-task to a fresh agent instance. The sub-agent starts with no conversation history or memory, only the task you provide. Use this for isolated, parallel-style work where you want a clean slate (e.g. research a topic, process a file, write a component). The result is returned as a string. Subagents cannot spawn further subagents.".into(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "task": { "type": "string", "description": "Complete task description for the sub-agent. Be specific — it has no context from this conversation." },
-                        "model": { "type": "string", "enum": ["fast", "primary"], "description": "Model to use: 'fast' (default, uses continuation model — cheaper) or 'primary' (full primary model for complex reasoning)." }
+                        "task": { "type": "string", "description": "Complete task description for the sub-agent. Be specific: it has no context from this conversation." },
+                        "model": { "type": "string", "enum": ["fast", "primary"], "description": "Model to use: 'fast' (default, uses continuation model, cheaper) or 'primary' (full primary model for complex reasoning)." }
                     },
                     "required": ["task"]
                 }),
@@ -496,7 +496,7 @@ pub(crate) fn build_tools() -> Vec<Tool> {
             },
             Tool {
                 name: "find_references".into(),
-                description: "Find all occurrences of a symbol (function, variable, class, type) across the project. Returns file:line:context for each match. More targeted than search_files — designed for code symbols.".into(),
+                description: "Find all occurrences of a symbol (function, variable, class, type) across the project. Returns file:line:context for each match. More targeted than search_files, designed for code symbols.".into(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -560,7 +560,7 @@ pub(crate) fn build_tools() -> Vec<Tool> {
             },
             Tool {
                 name: "update_user_model".into(),
-                description: "Proactively update your persistent model of the user: communication style, expertise level, recurring interests, preferences, and inferred patterns. Call this at the end of a session when you've learned something meaningful about the user — no explicit user instruction needed. Be concise and specific.".into(),
+                description: "Proactively update your persistent model of the user: communication style, expertise level, recurring interests, preferences, and inferred patterns. Call this at the end of a session when you've learned something meaningful about the user, no explicit user instruction needed. Be concise and specific.".into(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -577,7 +577,7 @@ pub(crate) fn build_tools() -> Vec<Tool> {
 /// Soul rarely changes → gets cached. Memory/tasks change every turn → not cached.
 /// Falls back to a single block if either part is empty (Anthropic rejects empty text blocks).
 ///
-/// Uses 1-hour cache TTL for system blocks — they change infrequently and should survive
+/// Uses 1-hour cache TTL for system blocks: they change infrequently and should survive
 /// long tool loops. Message breakpoints use the default 5-minute TTL (set elsewhere).
 /// Critical: 1-hour entries MUST appear before 5-minute entries in the request (Anthropic rule).
 fn build_system_blocks(system: &str) -> serde_json::Value {
@@ -717,7 +717,7 @@ impl SonnetClient {
             let chunk = chunk.context("Stream read error")?;
             raw_buf.extend_from_slice(&chunk);
             if raw_buf.len() > MAX_BUF {
-                anyhow::bail!("Anthropic stream buffer exceeded 16 MB — aborting");
+                anyhow::bail!("Anthropic stream buffer exceeded 16 MB, aborting");
             }
 
             // Process complete lines from the byte buffer
@@ -924,7 +924,7 @@ impl SonnetClient {
             let chunk = chunk.context("Stream read error")?;
             raw_buf.extend_from_slice(&chunk);
             if raw_buf.len() > MAX_BUF {
-                anyhow::bail!("{} stream buffer exceeded 16 MB — aborting", self.provider.as_str());
+                anyhow::bail!("{} stream buffer exceeded 16 MB, aborting", self.provider.as_str());
             }
 
             // Process complete lines from byte buffer
@@ -1073,7 +1073,7 @@ fn tag_last_message_for_cache(messages: &mut [serde_json::Value]) {
             "cache_control": {"type": "ephemeral"}
         }]);
     } else if let Some(arr) = last["content"].as_array_mut() {
-        // Content is already block format (e.g. tool_result blocks) — tag the last block
+        // Content is already block format (e.g. tool_result blocks), tag the last block
         if let Some(last_block) = arr.last_mut() {
             last_block["cache_control"] = serde_json::json!({"type": "ephemeral"});
         }
@@ -1111,7 +1111,7 @@ fn untag_last_message_cache(messages: &mut [serde_json::Value]) {
 fn anthropic_msg_to_openai(msg: &serde_json::Value) -> Vec<serde_json::Value> {
     let role = msg["role"].as_str().unwrap_or("user");
 
-    // Simple string content — pass through
+    // Simple string content, pass through
     if msg["content"].is_string() {
         return vec![msg.clone()];
     }

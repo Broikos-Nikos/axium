@@ -49,7 +49,7 @@ pub enum AgentEvent {
     ModelUsed(String),
     /// Agent turn is complete.
     Done,
-    /// Heartbeat decided the response was incomplete — text is being discarded and retried.
+    /// Heartbeat decided the response was incomplete, text is being discarded and retried.
     /// The UI should clear any already-rendered streaming text.
     Retry,
     /// Agent requests autonomous mode on/off for this session.
@@ -109,7 +109,7 @@ pub struct TurnConfig {
     pub smtp_from: String,
     pub telegram_bot_token: String,
     pub conversation_logging: bool,
-    // Subagent fields — needed to spawn a fresh agent with the same credentials
+    // Subagent fields, needed to spawn a fresh agent with the same credentials
     pub http: Arc<reqwest::Client>,
     pub keys: super::ApiKeySet,
     pub primary_model: String,
@@ -144,10 +144,10 @@ pub struct TurnConfig {
     pub conv_logger: Option<ConvLogger>,
     /// Chat database for cross-session history search.
     pub chat_db: Arc<ChatDb>,
-    /// Where this turn's cost is billed. `None` outside a metered run — the
+    /// Where this turn's cost is billed. `None` outside a metered run, the
     /// interactive channels do not pay for the bookkeeping, the benchmark does.
     pub meter: Option<crate::agent::metrics::MeterHandle>,
-    /// Typed, importance-scored facts. Shared across the turns of a session — a
+    /// Typed, importance-scored facts. Shared across the turns of a session, a
     /// fact captured in turn 1 must be in front of the model in turn 20. `None`
     /// when `facts_enabled` is off, which removes the fact tools with it.
     pub facts: Option<Arc<FactStore>>,
@@ -223,7 +223,7 @@ pub async fn classify_and_run(
             info!(mode = "simple", "Mode: direct pass-through, no classifier");
             let _ = tx.send(AgentEvent::Classified {
                 class: "simple".into(),
-                detail: "Simple mode — direct to primary model".into(),
+                detail: "Simple mode, direct to primary model".into(),
             });
         }
         "skills" => {
@@ -299,15 +299,15 @@ pub async fn classify_and_run(
                         info!(class = "simple", "Classifier: pass-through on continuation model");
                         let _ = tx.send(AgentEvent::Classified {
                             class: "simple".into(),
-                            detail: "Simple task — continuation model for all calls".into(),
+                            detail: "Simple task, continuation model for all calls".into(),
                         });
                     }
                     Ok(PromptClass::Medium) => {
                         is_medium = true;
-                        info!(class = "medium", "Classifier: medium complexity — skip review, keep tests");
+                        info!(class = "medium", "Classifier: medium complexity, skip review, keep tests");
                         let _ = tx.send(AgentEvent::Classified {
                             class: "medium".into(),
-                            detail: "Medium task — primary model, tests only".into(),
+                            detail: "Medium task, primary model, tests only".into(),
                         });
                     }
                     Err(e) => {
@@ -381,7 +381,7 @@ pub async fn classify_and_run(
     let mut combined_tool_log = String::new();
     let mut compacted = false;
 
-    // Track history length before the loop — messages added during review rounds
+    // Track history length before the loop, messages added during review rounds
     // are ephemeral (assistant drafts + [SYSTEM REVIEW] continuations) and MUST be
     // removed after the loop. Leaving them causes the model to see stale [SYSTEM REVIEW]
     // injections in future turns and misidentify real user messages as prompt injections.
@@ -406,7 +406,7 @@ pub async fn classify_and_run(
             }
         };
 
-        // If history shrank, compaction happened in-place — update the baseline so
+        // If history shrank, compaction happened in-place, update the baseline so
         // the truncate at the end of the loop only removes ephemeral review messages.
         if turn_compacted {
             compacted = true;
@@ -430,7 +430,7 @@ pub async fn classify_and_run(
         }
 
         // Append assistant response to history for context in next round.
-        // Strip tool_log and think tags — tool_log is already captured in combined_tool_log,
+        // Strip tool_log and think tags, tool_log is already captured in combined_tool_log,
         // and think tags contain stale planning that can mislead the model on subsequent turns.
         history.push(Message { role: "assistant".into(), content: strip_think_tags(&strip_tool_log(&text)) });
 
@@ -439,7 +439,7 @@ pub async fn classify_and_run(
             break;
         }
 
-        // Skip quality review if all tools succeeded and agent produced a substantial response —
+        // Skip quality review if all tools succeeded and agent produced a substantial response,
         // the LLM call is unnecessary when the outcome is clearly complete.
         let all_tools_ok = !combined_tool_log.is_empty()
             && !combined_tool_log.lines().any(|l| l.starts_with("✗"));
@@ -452,7 +452,7 @@ pub async fn classify_and_run(
         }
 
         // Quality review via small model.
-        // Strip tool_log from the text — the reviewer already has tool info in combined_tool_log.
+        // Strip tool_log from the text: the reviewer already has tool info in combined_tool_log.
         // Without stripping, the 800-char tail sent to the reviewer may be entirely tool entries.
         let feedback = classifier.quality_review(
             &user_msg,
@@ -604,7 +604,7 @@ pub async fn classify_and_run(
                                 combined_text.push_str(&re_fail);
                             }
                         } else {
-                            break; // timeout — stop retrying
+                            break; // timeout: stop retrying
                         }
                     }
                 }
@@ -614,10 +614,10 @@ pub async fn classify_and_run(
 
     // ── post-turn learning ───────────────────────────────────────────────
     // Everything below is best-effort. A failure here must cost a fact, a
-    // journal line or a distilled skill — never the turn that already succeeded.
+    // journal line or a distilled skill, never the turn that already succeeded.
     // The checkpoint's file list IS the turn's changed set, so nothing needs to
     // track it twice. With checkpoints disabled there is no set and the journal
-    // stays quiet — an ablation-only configuration, noted in AXIUM_UPGRADE.md.
+    // stays quiet, an ablation-only configuration, noted in AXIUM_UPGRADE.md.
     let changed_files = match cfg.checkpoints.as_ref() {
         Some(cp) => {
             let mut cp = cp.lock().unwrap_or_else(|e| e.into_inner());
@@ -641,7 +641,7 @@ pub async fn classify_and_run(
 /// entry, and (rarely) a distilled skill.
 ///
 /// Split out of `classify_and_run` because that function is already long and
-/// this is a distinct concern with a distinct failure policy — nothing here is
+/// this is a distinct concern with a distinct failure policy: nothing here is
 /// allowed to affect what the user gets back.
 async fn after_turn(
     classifier: &Classifier,
@@ -766,7 +766,7 @@ pub async fn run_agent_turn(
         _ => String::new(),
     };
 
-    // Build system prompt — soul + memory + project only (stable content that caches well).
+    // Build system prompt, soul + memory + project only (stable content that caches well).
     // tasks_summary is intentionally excluded: it changes frequently (task create/update/complete)
     // and would bust the Anthropic cache for the entire memory+project block on every change.
     // Tasks are injected into api_msgs below so they land in the volatile messages layer instead.
@@ -828,7 +828,7 @@ pub async fn run_agent_turn(
         [TOOL EFFICIENCY]\n\
         If you need to call multiple tools and there are no dependencies between them, \
         call all independent tools in a single response. For example, read multiple files \
-        at once, or run a command while writing a file. Never use placeholders — only call \
+        at once, or run a command while writing a file. Never use placeholders, only call \
         tools when you have all required parameters.\n\
         {}{}{}",
         soul, facts_instructions, undo_instructions, brain_block
@@ -937,7 +937,7 @@ pub async fn run_agent_turn(
     let mut nudge_count: usize = 0;
     let mut force_tool_next = false;
     let mut reset_text_on_next = false;
-    let mut last_was_tool = false; // true after a tool-use round — triggers cheaper model
+    let mut last_was_tool = false; // true after a tool-use round, triggers cheaper model
     let mut last_model_used = sonnet.model_name().to_string();
     const MAX_NUDGES: usize = 2;
 
@@ -986,7 +986,7 @@ pub async fn run_agent_turn(
         if reset_text_on_next {
             final_text.clear();
             reset_text_on_next = false;
-            // Tell the UI to discard the already-streamed text — a new attempt is starting.
+            // Tell the UI to discard the already-streamed text: a new attempt is starting.
             let _ = tx.send(AgentEvent::Retry);
         }
 
@@ -1013,7 +1013,7 @@ pub async fn run_agent_turn(
         let active_sonnet = if using_fallback {
             fallback_client.as_ref().unwrap_or(sonnet)
         } else if last_was_tool || all_cheap {
-            // all_cheap: task was classified Simple or mode=="simple" — use continuation
+            // all_cheap: task was classified Simple or mode=="simple": use continuation
             // model for every call, including the first, to save cost without quality loss.
             continuation_client.as_ref().unwrap_or(sonnet)
         } else {
@@ -1025,14 +1025,14 @@ pub async fn run_agent_turn(
         // Check rate-limit cooldown for the active model
         if let Some(expires) = cooldowns.get(&last_model_used) {
             if std::time::Instant::now() < *expires {
-                // Model is still rate-limited — try fallback if we haven't already
+                // Model is still rate-limited, try fallback if we haven't already
                 if !using_fallback && fallback_client.is_some() && !tried_fallback {
                     warn!(model = %last_model_used, "Model still in cooldown, switching to fallback");
                     using_fallback = true;
                     tried_fallback = true;
                     continue;
                 }
-                // No fallback available — just wait out the cooldown
+                // No fallback available, just wait out the cooldown
                 let remaining = expires.duration_since(std::time::Instant::now());
                 tokio::time::sleep(remaining).await;
             }
@@ -1080,13 +1080,13 @@ pub async fn run_agent_turn(
                 match parse_http_status(&e) {
                     Some(401) | Some(403) => {
                         let _ = tx.send(AgentEvent::Error(
-                            format!("API authentication failed — check your API key in Settings. ({})", e)
+                            format!("API authentication failed: check your API key in Settings. ({})", e)
                         ));
                         break;
                     }
                     Some(429) | Some(529) => {
                         let wait = parse_retry_after(&e.to_string()).unwrap_or(20);
-                        warn!(wait, model = %last_model_used, "Rate limited — backing off");
+                        warn!(wait, model = %last_model_used, "Rate limited, backing off");
                         // Record cooldown for this model
                         cooldowns.insert(
                             last_model_used.clone(),
@@ -1101,7 +1101,7 @@ pub async fn run_agent_turn(
                         }
                         let _ = tx.send(AgentEvent::ToolOutput {
                             name: "system".into(),
-                            stdout: format!("Rate limited — retrying in {}s...", wait),
+                            stdout: format!("Rate limited, retrying in {}s...", wait),
                             stderr: String::new(),
                             code: 0,
                         });
@@ -1122,7 +1122,7 @@ pub async fn run_agent_turn(
                                 consecutive_errors = 0;
                                 let _ = tx.send(AgentEvent::ToolOutput {
                                     name: "system".into(),
-                                    stdout: "Primary model failed — switching to fallback model...".to_string(),
+                                    stdout: "Primary model failed, switching to fallback model...".to_string(),
                                     stderr: String::new(),
                                     code: 0,
                                 });
@@ -1192,14 +1192,14 @@ pub async fn run_agent_turn(
         }
 
         if stop_reason == "max_tokens" {
-            // Model was cut off mid-response — it didn't choose to stop.
+            // Model was cut off mid-response, it didn't choose to stop.
             // Always continue unless we've exhausted nudges.
             info!(
                 iteration = iterations,
                 stop_reason = "max_tokens",
                 final_text_len = final_text.len(),
                 nudge_count = nudge_count,
-                "Model hit max_tokens — auto-continuing"
+                "Model hit max_tokens, auto-continuing"
             );
             if nudge_count < MAX_NUDGES && iterations < cfg.max_tool_iterations {
                 nudge_count += 1;
@@ -1223,7 +1223,7 @@ pub async fn run_agent_turn(
             let tool_log_str = tool_log.join("\n");
 
             // Heartbeat check: verify the agent actually completed the task.
-            // Only meaningful when tools were called AND the agent produced minimal text —
+            // Only meaningful when tools were called AND the agent produced minimal text,
             // i.e. the agent planned/described work but didn't execute it.
             // If the agent already wrote a substantial response (>= 200 chars of visible text),
             // the task was informational and the response should never be nuked.
@@ -1246,11 +1246,11 @@ pub async fn run_agent_turn(
             let is_complete = if !any_tools_called {
                 true
             } else if tool_log.len() < HEARTBEAT_TOOL_THRESHOLD {
-                true // short chain — skip expensive heartbeat
+                true // short chain, skip expensive heartbeat
             } else if last_tool_is_terminal {
                 true // last action was clearly a terminal write/send
             } else if visible_len >= SUBSTANTIAL_RESPONSE {
-                true // agent already wrote a real answer — don't nuke it
+                true // agent already wrote a real answer, don't nuke it
             } else if nudge_count >= MAX_NUDGES || iterations >= cfg.max_tool_iterations {
                 true // budget exhausted, accept whatever we have
             } else {
@@ -1261,7 +1261,7 @@ pub async fn run_agent_turn(
                 ).await {
                     Ok(result) => result,
                     Err(_) => {
-                        tracing::warn!("Heartbeat classifier timed out after 15s — assuming complete");
+                        tracing::warn!("Heartbeat classifier timed out after 15s, assuming complete");
                         true
                     }
                 }
@@ -1292,16 +1292,16 @@ pub async fn run_agent_turn(
                         "[SYSTEM] You have not finished the user's request.\n\
                         Tools executed so far:\n{}\n\
                         Review what the user asked and complete the remaining work. \
-                        Do NOT repeat tools you already called — use those results to finish.",
+                        Do NOT repeat tools you already called: use those results to finish.",
                         nudge_log
                     )
                 } else {
                     "[SYSTEM] You described what you will do but did not call any tools.\n\
                     Call write_file, run_command, or other tools NOW to complete the task.\n\
-                    Do NOT produce more text or explanations — respond ONLY with tool_use blocks.".to_string()
+                    Do NOT produce more text or explanations, respond ONLY with tool_use blocks.".to_string()
                 };
 
-                info!(nudge = nudge_count, "Heartbeat: incomplete — nudging agent");
+                info!(nudge = nudge_count, "Heartbeat: incomplete, nudging agent");
                 api_msgs.push(serde_json::json!({
                     "role": "user",
                     "content": nudge_msg
@@ -1348,7 +1348,7 @@ pub async fn run_agent_turn(
             if tool_name == "run_subagent" {
                 subagent_calls.push((tool_id, tool_name, input));
             } else if tool_name == "ask_user" || tool_name == "plan_file_changes" {
-                // These tools wait for user interaction — must NOT use the generic
+                // These tools wait for user interaction, must NOT use the generic
                 // 90-second spawn timeout. Run them inline after parallel tools finish.
                 subagent_calls.push((tool_id, tool_name, input));
             } else {
@@ -1460,7 +1460,7 @@ pub async fn run_agent_turn(
             }
         }
 
-        // Run subagent / interactive tool requests directly (not in spawn — avoids Send
+        // Run subagent / interactive tool requests directly (not in spawn, avoids Send
         // constraint for subagents, and avoids the 90-second timeout for ask_user/plan_file_changes).
         for (tool_id, tool_name, input) in subagent_calls {
             let result = if tool_name == "run_subagent" {
@@ -1474,7 +1474,7 @@ pub async fn run_agent_turn(
                     Err(_) => "Error: subagent timed out after 5 minutes.".to_string(),
                 }
             } else {
-                // ask_user / plan_file_changes — run inline with no wrapping timeout
+                // ask_user / plan_file_changes: run inline with no wrapping timeout
                 // (they have their own internal timeouts: 300s / 120s)
                 let inline_started = std::time::Instant::now();
                 let inline_result = execute_tool(&tool_name, &input, cfg, task_db, tx).await;
@@ -1569,7 +1569,7 @@ pub async fn run_agent_turn(
                 api_msgs.len()
             };
             let mut split = api_msgs.len().saturating_sub(keep);
-            // Walk forward to land on an assistant message so `recent` starts there —
+            // Walk forward to land on an assistant message so `recent` starts there,
             // avoids placing two consecutive user messages at the split boundary.
             while split < api_msgs.len() && api_msgs[split]["role"].as_str() != Some("assistant") {
                 split += 1;
@@ -1596,7 +1596,7 @@ pub async fn run_agent_turn(
                         });
                     }
                     Err(e) => {
-                        warn!(error = %e, "Mid-turn compaction failed — continuing with full context");
+                        warn!(error = %e, "Mid-turn compaction failed, continuing with full context");
                     }
                 }
             }
@@ -1974,7 +1974,7 @@ impl DurableContext {
 ///
 /// Everything before it is sent with a cache breakpoint and must be stable across
 /// a session; everything after is re-sent every turn. Changing this without
-/// changing `sonnet.rs::MARKER` disables caching silently — the prompt still
+/// changing `sonnet.rs::MARKER` disables caching silently, the prompt still
 /// works, it just costs full price on every request.
 const SYSTEM_CACHE_MARKER: &str = "\n\n[MEMORY]\n";
 
@@ -2041,7 +2041,7 @@ async fn execute_tool(
             let cmd = input["command"].as_str().unwrap_or("");
             let pw = if sudo_password.is_empty() { None } else { Some(sudo_password) };
 
-            // Detect reboot/shutdown — run with a 5s delay so the agent can finish
+            // Detect reboot/shutdown: run with a 5s delay so the agent can finish
             // its turn and save the response before the system goes down.
             let is_system_power = {
                 let c = cmd.trim().to_lowercase();
@@ -2229,7 +2229,7 @@ async fn execute_tool(
                             }
                         }
                         Err(_) => {
-                            // File doesn't exist yet — just write
+                            // File doesn't exist yet, just write
                             std::fs::write(path, content)
                                 .map(|_| format!("Written to {}", path))
                                 .unwrap_or_else(|e| format!("Error writing {}: {}", path, e))
@@ -2340,7 +2340,7 @@ async fn execute_tool(
                                 "No tasks.".to_string()
                             } else {
                                 tasks.iter()
-                                    .map(|t| format!("#{} [{}] {} — {}", t.id, t.status, t.title, t.context))
+                                    .map(|t| format!("#{} [{}] {}, {}", t.id, t.status, t.title, t.context))
                                     .collect::<Vec<_>>()
                                     .join("\n")
                             }
@@ -2401,7 +2401,7 @@ async fn execute_tool(
                 let file   = change["file"].as_str().unwrap_or("?");
                 let action = change["action"].as_str().unwrap_or("modify");
                 let desc   = change["description"].as_str().unwrap_or("");
-                plan.push_str(&format!("  [{action}] `{file}` — {desc}\n"));
+                plan.push_str(&format!("  [{action}] `{file}`, {desc}\n"));
             }
             plan.push_str("\nProceed with these changes? (yes/no)");
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -2410,13 +2410,13 @@ async fn execute_tool(
                 Ok(Ok(reply)) => {
                     let r = reply.trim().to_lowercase();
                     if r == "yes" || r == "y" || r.contains("ok") || r.contains("proceed") || r.contains("sure") {
-                        format!("Plan approved — proceed with all {} changes.", changes.len())
+                        format!("Plan approved, proceed with all {} changes.", changes.len())
                     } else {
                         format!("Plan rejected: {}. Stop and ask the user what to change.", reply)
                     }
                 }
                 Ok(Err(_)) => "User did not reply (connection closed).".to_string(),
-                Err(_) => "Timed out waiting for plan approval — aborting.".to_string(),
+                Err(_) => "Timed out waiting for plan approval, aborting.".to_string(),
             }
         }
         "update_project_knowledge" => {
@@ -2490,9 +2490,9 @@ async fn execute_tool(
             let enabled = input["enabled"].as_bool().unwrap_or(false);
             let _ = tx.send(AgentEvent::SetAutonomous { enabled });
             if enabled {
-                "Autonomous mode enabled — I will continue working through the task without waiting for user input after each step.".to_string()
+                "Autonomous mode enabled: I will continue working through the task without waiting for user input after each step.".to_string()
             } else {
-                "Autonomous mode disabled — I will pause for user input after each step.".to_string()
+                "Autonomous mode disabled: I will pause for user input after each step.".to_string()
             }
         }
         "queue_task" => {
@@ -2610,7 +2610,7 @@ async fn execute_tool(
                 match std::fs::rename(&src, &dst) {
                     Ok(_) => format!("Moved {} → {}", src, dst),
                     Err(_) => {
-                        // rename fails across filesystems — fallback to copy+delete
+                        // rename fails across filesystems, fallback to copy+delete
                         match std::fs::copy(&src, &dst) {
                             Ok(_) => {
                                 if let Err(e) = std::fs::remove_file(&src) {
@@ -2859,7 +2859,7 @@ async fn execute_tool(
     Ok((truncate_str(&result, max_output_chars), None))
 }
 
-/// Run a subagent task directly (not inside tokio::spawn — avoids Send constraints).
+/// Run a subagent task directly (not inside tokio::spawn, avoids Send constraints).
 /// Returns the subagent's final text output. Uses Box::pin to break the recursive type cycle.
 fn run_subagent_task<'a>(
     task: &'a str,
@@ -3086,11 +3086,11 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
         s.to_string()
     } else {
         let head = safe_head(s, max_chars);
-        format!("{}\n\n[OUTPUT TRUNCATED — {} chars total, showing first {}]", head, s.len(), head.len())
+        format!("{}\n\n[OUTPUT TRUNCATED, {} chars total, showing first {}]", head, s.len(), head.len())
     }
 }
 
-/// Tail-first truncation — keeps the LAST max_chars of output.
+/// Tail-first truncation, keeps the LAST max_chars of output.
 /// Better for command output: errors/results are always at the end, not the start.
 fn truncate_tail(s: &str, max_chars: usize) -> String {
     if s.len() <= max_chars {
@@ -3099,7 +3099,7 @@ fn truncate_tail(s: &str, max_chars: usize) -> String {
         let start = snap_ceil(s, s.len() - max_chars);
         // Then snap to a newline boundary so we don't cut mid-line
         let snapped = s[start..].find('\n').map(|i| start + i + 1).unwrap_or(start);
-        format!("[OUTPUT TRUNCATED — {} chars total, showing last {}]\n{}", s.len(), s.len() - snapped, &s[snapped..])
+        format!("[OUTPUT TRUNCATED, {} chars total, showing last {}]\n{}", s.len(), s.len() - snapped, &s[snapped..])
     }
 }
 
@@ -3136,7 +3136,7 @@ fn format_log_entry(user_msg: &str, enhanced_msg: Option<&str>, model: &str, rep
 /// Number of buffered log entries that triggers an immediate background flush.
 const LOG_FLUSH_THRESHOLD: usize = 100;
 
-/// Record a conversation turn to the log — either buffered (if `cfg.conv_logger` is set)
+/// Record a conversation turn to the log, either buffered (if `cfg.conv_logger` is set)
 /// or written synchronously to disk as a fallback.
 async fn record_conv_turn(
     cfg: &TurnConfig,
@@ -3170,7 +3170,7 @@ pub(crate) fn strip_think_tags(s: &str) -> String {
             match out[start..].find(close) {
                 Some(end_rel) => out.replace_range(start..start + end_rel + close.len(), ""),
                 None => {
-                    out.truncate(start); // unclosed tag — drop to end
+                    out.truncate(start); // unclosed tag: drop to end
                     break;
                 }
             }
@@ -3178,7 +3178,7 @@ pub(crate) fn strip_think_tags(s: &str) -> String {
     }
     let trimmed = out.trim().to_string();
     // If trimmed is empty the model produced only think-block content (no visible output).
-    // Return empty string — the caller decides how to handle it. Do NOT return the raw
+    // Return empty string, the caller decides how to handle it. Do NOT return the raw
     // tagged text, which would leak <think> blocks into history or the UI.
     trimmed
 }
@@ -3193,7 +3193,7 @@ fn extract_text_from_api_msg(m: &serde_json::Value) -> String {
                     let t = b["text"].as_str().unwrap_or("");
                     if t.is_empty() { None } else { Some(t.to_string()) }
                 }
-                "thinking" => None, // skip — too noisy
+                "thinking" => None, // skip, too noisy
                 "tool_use" => Some(format!(
                     "[tool_call: {}({})]",
                     b["name"].as_str().unwrap_or("?"),
@@ -3238,7 +3238,7 @@ pub(crate) fn compress_tool_log(s: &str) -> String {
                 let inner_start = abs + 10; // len("<tool_log>")
                 match out[inner_start..].find("</tool_log>") {
                     None => {
-                        // Unclosed tag — drop to end
+                        // Unclosed tag: drop to end
                         break;
                     }
                     Some(rel_end) => {
@@ -3263,7 +3263,7 @@ pub(crate) fn compress_tool_log(s: &str) -> String {
                                     };
                                     result.push_str(&trimmed);
                                 } else {
-                                    // No arrow — keep as-is but cap length
+                                    // No arrow: keep as-is but cap length
                                     if line.len() > RESULT_LIMIT * 2 {
                                         result.push_str(safe_head(line, RESULT_LIMIT * 2));
                                         result.push('…');
@@ -3295,7 +3295,7 @@ pub(crate) fn strip_tool_log(s: &str) -> String {
         match out[start..].find("</tool_log>") {
             Some(end_rel) => out.replace_range(start..start + end_rel + 11, ""),
             None => {
-                out.truncate(start); // unclosed tag — drop to end
+                out.truncate(start); // unclosed tag: drop to end
                 break;
             }
         }
@@ -3363,17 +3363,17 @@ fn parse_retry_after(body: &str) -> Option<u64> {
 fn detect_test_command(working_dir: &str) -> Option<(String, Vec<String>)> {
     let dir = std::path::Path::new(working_dir);
 
-    // Rust — Cargo.toml
+    // Rust, Cargo.toml
     if dir.join("Cargo.toml").exists() {
         return Some(("cargo".into(), vec!["test".into(), "--".into(), "--color=never".into()]));
     }
 
-    // Go — go.mod
+    // Go, go.mod
     if dir.join("go.mod").exists() {
         return Some(("go".into(), vec!["test".into(), "./...".into()]));
     }
 
-    // Python — pytest / unittest
+    // Python, pytest / unittest
     if dir.join("pytest.ini").exists()
         || dir.join("pyproject.toml").exists()
         || dir.join("setup.py").exists()
@@ -3385,7 +3385,7 @@ fn detect_test_command(working_dir: &str) -> Option<(String, Vec<String>)> {
         return Some(("python3".into(), vec!["-m".into(), "unittest".into(), "discover".into(), "-q".into()]));
     }
 
-    // PHP — phpunit.xml
+    // PHP, phpunit.xml
     if dir.join("phpunit.xml").exists() || dir.join("phpunit.xml.dist").exists() {
         if dir.join("vendor/bin/phpunit").exists() {
             return Some(("./vendor/bin/phpunit".into(), vec!["--no-interaction".into()]));
@@ -3393,7 +3393,7 @@ fn detect_test_command(working_dir: &str) -> Option<(String, Vec<String>)> {
         return Some(("phpunit".into(), vec!["--no-interaction".into()]));
     }
 
-    // Node — package.json with test script
+    // Node, package.json with test script
     if dir.join("package.json").exists() {
         if let Ok(pkg) = std::fs::read_to_string(dir.join("package.json")) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&pkg) {
@@ -3407,7 +3407,7 @@ fn detect_test_command(working_dir: &str) -> Option<(String, Vec<String>)> {
         }
     }
 
-    // Ruby — Rakefile or spec/
+    // Ruby, Rakefile or spec/
     if dir.join("Gemfile").exists() && dir.join("spec").is_dir() {
         return Some(("bundle".into(), vec!["exec".into(), "rspec".into(), "--no-color".into()]));
     }
@@ -3595,7 +3595,7 @@ async fn rename_symbol_in_project(old_name: &str, new_name: &str, search_dir: &s
                     out.push_str(&format!("\n⚠ Post-rename diagnostics found errors:\n{}", errors));
                 }
             } else {
-                out.push_str("\n✓ Diagnostics passed — no errors.");
+                out.push_str("\n✓ Diagnostics passed, no errors.");
             }
         }
     }
@@ -3886,8 +3886,8 @@ mod wiring_tests {
     /// Rebuild the system prompt the way `run_agent_turn` does.
     ///
     /// Duplicating the format string in a test would let the two drift silently,
-    /// so this asserts on the *properties* that matter — what sits above and below
-    /// the cache breakpoint — using the same helper pieces the real code uses.
+    /// so this asserts on the *properties* that matter, what sits above and below
+    /// the cache breakpoint, using the same helper pieces the real code uses.
     fn assemble(soul: &str, brain_block: &str, memory: &str, project: &str,
                 facts_block: &str, volatile: &str) -> String {
         let cached_head = format!("{soul}\n\n[TOOL EFFICIENCY]\n...\n{brain_block}");
@@ -4104,7 +4104,7 @@ mod truncation_tests {
         let out = truncate_for_report(&table, 1000);
         assert_eq!(out.chars().count(), 1000);
         // The point is that the box character survived whole rather than being
-        // cut in half — byte-slicing at 1000 lands inside it and panics.
+        // cut in half, byte-slicing at 1000 lands inside it and panics.
         assert!(out.contains('│'));
         assert_eq!(out.chars().nth(998), Some('│'));
     }

@@ -1,4 +1,4 @@
-"""Benchmark runner — drives the REAL agent loop across the scenarios.
+"""Benchmark runner, drives the REAL agent loop across the scenarios.
 
 Every scenario gets a freshly generated copy of the seed project, so runs never
 contaminate each other and a destructive scenario cannot damage anything real.
@@ -303,8 +303,8 @@ def run_suite(cfg, scs, mode, reps, keep, verbose, tag):
     print(f"\n=== {cfg.models.primary} · continuation={cfg.models.continuation or '(none)'} "
           f"· mode={mode} · {len(scs)} scenario(s) x {reps} rep(s) ===\n")
     # Append after EVERY scenario, not once at the end. A suite that writes only
-    # on completion loses the whole run to any interruption — a Ctrl-C, a
-    # timeout, a killed shell — and every one of those scenarios was paid for
+    # on completion loses the whole run to any interruption, a Ctrl-C, a
+    # timeout, a killed shell, and every one of those scenarios was paid for
     # with real API calls. Learned by losing 21 scenarios' worth, twice.
     os.makedirs(LOGS, exist_ok=True)
     path = os.path.join(LOGS, f"{tag}.jsonl")

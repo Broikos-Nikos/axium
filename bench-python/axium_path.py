@@ -7,9 +7,9 @@ the package at import time.
 
 Resolution order, first hit wins:
 
-1. `AXIUM_PYTHON` in the environment — an explicit path to the directory that
+1. `AXIUM_PYTHON` in the environment, an explicit path to the directory that
    *contains* the `axium` package. Set this when the agent lives somewhere else.
-2. `../python` relative to this file — the layout in the axium repo.
+2. `../python` relative to this file, the layout in the axium repo.
 3. Whatever is already importable (a `pip install`ed axium, say).
 
 A wrong or missing path fails here with a message naming the env var, rather than

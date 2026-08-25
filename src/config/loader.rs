@@ -18,7 +18,7 @@ pub struct ApiKeys {
     pub anthropic: String,
     #[serde(default)]
     pub openai: String,
-    /// DeepSeek — OpenAI-compatible API at api.deepseek.com.
+    /// DeepSeek, OpenAI-compatible API at api.deepseek.com.
     #[serde(default)]
     pub deepseek: String,
 }

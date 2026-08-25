@@ -2,7 +2,7 @@
 name = "axiom"
 version = "1.0.0"
 edition = "2021"
-description = "Axium — local-first autonomous Linux assistant"
+description = "Axium, local-first autonomous Linux assistant"
 authors = ["Nikos Broikos <nikos@broikos.gr>"]
 homepage = "https://broikos.gr"
 

@@ -3,7 +3,7 @@
 `bench-rust/` drives the Rust binary through the same scenarios as `bench.runner`
 drives the Python one. The graders are Python that imports the agent's output
 code and executes it, so reimplementing them in Rust would mean two graders that
-could disagree — and a benchmark whose two halves disagree about what "correct"
+could disagree, and a benchmark whose two halves disagree about what "correct"
 means is not a comparison. So the graders stay here, single-source, and this is
 the process boundary `bench-rust` talks to.
 

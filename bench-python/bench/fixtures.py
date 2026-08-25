@@ -123,7 +123,7 @@ class Inventory:
         return p.stock
 '''
 
-# BUG 4 (B4): free shipping condition is inverted — shipping is charged on large
+# BUG 4 (B4): free shipping condition is inverted, shipping is charged on large
 #             orders and waived on small ones.
 FILES["shop/orders.py"] = '''"""Order totals."""
 from shop import pricing
@@ -262,7 +262,7 @@ FILES["data/catalogue.json"] = '''[
 '''
 
 # The regression gate. Every assertion here holds on the PRISTINE seed, bugs and
-# all — so a failure after an agent run means the agent broke something.
+# all, so a failure after an agent run means the agent broke something.
 FILES["tests/acceptance.py"] = '''"""Baseline behaviours that must survive every change.
 
 Run: python tests/acceptance.py   (exit 0 = all green)

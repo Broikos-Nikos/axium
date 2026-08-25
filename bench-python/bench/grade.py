@@ -3,8 +3,8 @@
 Every grader returns a list of (check_name, passed) pairs. Two axes are scored
 separately:
 
-    change  — did the agent do what was asked?
-    regress — is everything that already worked still working?
+    change, did the agent do what was asked?
+    regress, is everything that already worked still working?
 
 Behaviour is graded by IMPORTING the agent's code in a fresh subprocess and
 asserting on real outputs, never by pattern-matching the diff. An agent that
@@ -117,7 +117,7 @@ def g_b3(build):
 
 
 def g_b4(build):
-    """Free shipping above the threshold, flat rate below — the seed has it backwards."""
+    """Free shipping above the threshold, flat rate below: the seed has it backwards."""
     mk = ("from shop.models import Order, OrderLine\nfrom shop import orders\n"
           "def o(total):\n    return Order('X', 'c', [OrderLine('S', 1, total)])\n")
     return [
@@ -235,7 +235,7 @@ def g_r2(build):
         (f"module-level numeric constants defined (found {len(consts)})", len(consts) >= 2),
         # R2 is a PURE refactor on a seed that still carries B4's inverted shipping.
         # "Behaviour must not change" therefore means the seed's behaviour, bug and
-        # all — an agent that quietly fixes the bug here has changed behaviour.
+        # all, an agent that quietly fixes the bug here has changed behaviour.
         _probe(build, "shipping behaviour is byte-identical to the seed",
                "from shop import orders\nfrom shop.models import Order, OrderLine\n"
                "def o(v):\n    return Order('X', 'c', [OrderLine('S', 1, v)])\n"
@@ -327,7 +327,7 @@ def pct(rows):
 # ── mechanism scenarios ──────────────────────────────────────────────────────
 # These grade the durable-context layer itself rather than a coding task. They
 # are graded over the Turn (and, for M1, over a SECOND turn), because what they
-# measure — did a fact survive, was the undo exact, did the Brain save work —
+# measure, did a fact survive, was the undo exact, did the Brain save work,
 # is not visible in the file tree alone.
 
 def undo_was_exact(build, pristine_dir):

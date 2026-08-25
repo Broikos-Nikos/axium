@@ -33,7 +33,7 @@ pub struct AppState {
     pub sudo_password: RwLock<String>,
     /// Broadcasts watcher diagnostic events to all connected WebSocket clients.
     pub broadcast_tx: tokio::sync::broadcast::Sender<String>,
-    /// Shutdown sender for the Telegram bot — send `true` to stop the current bot.
+    /// Shutdown sender for the Telegram bot, send `true` to stop the current bot.
     pub telegram_shutdown: Mutex<tokio::sync::watch::Sender<bool>>,
     /// Plugin manager for hook execution.
     pub plugin_manager: Arc<RwLock<crate::plugins::PluginManager>>,
@@ -65,7 +65,7 @@ pub async fn get_project_context(state: &AppState, working_dir: &str) -> String 
         }
     }
 
-    // Cache miss — rebuild
+    // Cache miss, rebuild
     let ctx = project::build_project_context(working_dir);
     {
         let mut cache = state.project_context_cache.write().await;
@@ -294,7 +294,7 @@ async fn export_handler(
         }
     };
     let messages = state.chat_db.load_session_messages(&session_id).unwrap_or_default();
-    let mut markdown = format!("# Chat Export — {}\n\n", session_id);
+    let mut markdown = format!("# Chat Export, {}\n\n", session_id);
     for m in &messages {
         let role_label = match m.role.as_str() {
             "user" => "**User**",
@@ -448,9 +448,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             // Load previous messages
             if let Ok(msgs) = state.chat_db.load_session_messages(&id) {
                 for m in msgs {
-                    // Skip system-role messages (watcher diagnostics etc.) — not for LLM
+                    // Skip system-role messages (watcher diagnostics etc.), not for LLM
                     if m.role == "system" { continue; }
-                    // Skip [partial] messages saved during disconnects — incomplete data
+                    // Skip [partial] messages saved during disconnects, incomplete data
                     if m.content.starts_with("[partial] ") { continue; }
                     let content = if m.role == "assistant" {
                         crate::agent::router::strip_think_tags(&m.content)
@@ -471,7 +471,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let session_title = state.chat_db.get_session_title(&session_id);
     let greeting = serde_json::json!({
         "type": "system",
-        "text": format!("{} v0.3 — connected. Model: {} | Session: {} | History: {} msgs",
+        "text": format!("{} v0.3, connected. Model: {} | Session: {} | History: {} msgs",
             agent_name, model_name, session_id, history.len()),
         "session_id": session_id,
         "session_title": session_title,
@@ -573,7 +573,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             // Truncate user input if over limit, read config once, and build agent
             let sudo_pw = state.sudo_password.read().await.clone();
             let sudo_note = if !sudo_pw.is_empty() {
-                "\n\n## Sudo Access\nA sudo password is configured. When commands need elevated privileges, use `sudo` in run_command — the password is injected automatically and transparently. NEVER ask the user for their password."
+                "\n\n## Sudo Access\nA sudo password is configured. When commands need elevated privileges, use `sudo` in run_command: the password is injected automatically and transparently. NEVER ask the user for their password."
             } else { "" };
             let (user_text, sonnet, compactor, classifier, memory_path, soul, turn_cfg, project_ctx, memory_file) = {
                 let cfg = state.config.read().await;
@@ -670,7 +670,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
             info!(len = user_text.len(), "User message received");
 
-            // Plugin hook: on_message — may rewrite user_text
+            // Plugin hook: on_message, may rewrite user_text
             let user_text = {
                 let hook_input = serde_json::json!({
                     "user_text": user_text,
@@ -685,7 +685,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
             };
 
-            // Push to history but DON'T save to DB yet — deferred until agent succeeds
+            // Push to history but DON'T save to DB yet, deferred until agent succeeds
             history.push(Message::user(&user_text));
             let user_text_for_db = user_text.clone();
             let mut user_msg_saved = false;
@@ -716,15 +716,15 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 user details (name, contact, preferences, habits), project facts (paths, stack, commands, decisions), \
                 system info (IPs, hostnames, services, hardware), recurring workflows, or anything the user mentions \
                 about themselves or their work that would genuinely help in future sessions. \
-                Only save durable, reusable facts — not one-off task details or things mentioned in passing. \
-                You MUST use update_memory — this is the only way to retain information across sessions. \
+                Only save durable, reusable facts, not one-off task details or things mentioned in passing. \
+                You MUST use update_memory: this is the only way to retain information across sessions. \
                 Organize into sections: User Info, Preferences, Projects, Workflows, System, Notes.\n\n\
                 ## Tool Use Protocol\n\
                 CRITICAL: You are an EXECUTION agent, not a narration agent.\n\
                 - When a task requires creating files, calling commands, or any action: call write_file, run_command, etc. IMMEDIATELY.\n\
                 - NEVER say \"I'll write the script now\" or \"Let me create the file\" and then end your turn. \
                 The moment you decide to do something, emit the tool_use call in the SAME response.\n\
-                - Do NOT output code in markdown blocks (```python, ```bash) — instead, use write_file to save it and run_command to execute it.\n\
+                - Do NOT output code in markdown blocks (```python, ```bash), instead, use write_file to save it and run_command to execute it.\n\
                 - Your turn is NOT complete until you have called ALL necessary tools and delivered the final result.\n\
                 - Think of each response as: <think>plan</think> → tool calls → result summary. Never stop at the plan.\n\n\
                 ## Pre-flight Rule\n\
@@ -800,7 +800,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     event = rx.recv() => {
                         match event {
                             Some(AgentEvent::TextDelta(chunk)) => {
-                                // First successful content from API — now commit user msg to DB
+                                // First successful content from API, now commit user msg to DB
                                 if !user_msg_saved {
                                     let _ = state.chat_db.save_message(&session_id, "user", &user_text_for_db);
                                     user_msg_saved = true;
@@ -811,7 +811,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "text": chunk,
                                 });
                                 if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
-                                    // Connection lost — save partial text and abort agent
+                                    // Connection lost, save partial text and abort agent
                                     if !partial_text.is_empty() {
                                         info!("DB save [assistant/partial] from TextDelta disconnect handler");
                                         let _ = state.chat_db.save_message(&session_id, "assistant", &format!("[partial] {}", partial_text));
@@ -821,7 +821,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 }
                             }
                             Some(AgentEvent::Text(text)) => {
-                                // Full text from router — update partial_text so Done handler can finalize.
+                                // Full text from router, update partial_text so Done handler can finalize.
                                 // Don't save to DB here; Done handler saves once to avoid duplicates.
                                 partial_text = text.clone();
                                 let msg = serde_json::json!({
@@ -842,7 +842,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 }
                             }
                             Some(AgentEvent::ToolCall { name, input }) => {
-                                // Agent is working — commit user msg to DB
+                                // Agent is working, commit user msg to DB
                                 if !user_msg_saved {
                                     let _ = state.chat_db.save_message(&session_id, "user", &user_text_for_db);
                                     user_msg_saved = true;
@@ -929,7 +929,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     user_msg_saved = true;
                                 }
                                 // Push to history so LLM has context of the Q&A.
-                                // Don't save assistant to DB here — the Text+Done events that
+                                // Don't save assistant to DB here, the Text+Done events that
                                 // follow from the router will handle the single DB save.
                                 history.push(Message::assistant(&answer));
                                 history_pushed = true;
@@ -1002,7 +1002,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 // If agent never produced content, roll back the user message
                                 if !user_msg_saved && partial_text.is_empty() {
                                     history.pop();
-                                    info!("Rolled back user message — agent produced no output");
+                                    info!("Rolled back user message, agent produced no output");
                                 }
                                 // Save final text to DB and history (once).
                                 // Use a non-blocking check on agent_handle to avoid freezing the WS.
@@ -1034,7 +1034,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     };
                                     let clean = crate::agent::router::compress_tool_log(&crate::agent::router::strip_think_tags(&final_text));
 
-                                    // Plugin hook: on_response — may modify response text
+                                    // Plugin hook: on_response, may modify response text
                                     let clean = {
                                         let hook_input = serde_json::json!({
                                             "response": clean,
@@ -1125,7 +1125,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                                     recovery_window_start = history.len();
                                                 }
                                                 None => {
-                                                    // No cleanup needed — advance window anyway
+                                                    // No cleanup needed, advance window anyway
                                                     recovery_window_start = history.len();
                                                 }
                                             }
@@ -1167,7 +1167,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 if !user_msg_saved {
                                     history.pop();
                                 } else {
-                                    // User msg already in DB — save a cancellation note
+                                    // User msg already in DB, save a cancellation note
                                     info!("DB save [assistant/cancelled] from Cancel handler");
                                     let _ = state.chat_db.save_message(&session_id, "assistant", "[cancelled]");
                                 }
@@ -1212,7 +1212,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
             // Session title: generate eagerly on first 10 messages, then every 10 after.
             // Use DB count so reconnects don't reset the counter.
-            // Skip Telegram sessions — they keep their permanent "Telegram" title.
+            // Skip Telegram sessions, they keep their permanent "Telegram" title.
             let db_msg_count = state.chat_db.message_count(&session_id);
             let no_title = state.chat_db.get_session_title(&session_id).is_empty();
             if !session_id.starts_with("telegram_") && db_msg_count >= 10 && (no_title || db_msg_count.is_multiple_of(10)) {
@@ -1273,9 +1273,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 turns_since_recovery = 0;
                 if let Ok(msgs) = state.chat_db.load_session_messages(&target_id) {
                     for m in msgs {
-                        // Skip system-role messages (watcher diagnostics etc.) — not for LLM
+                        // Skip system-role messages (watcher diagnostics etc.), not for LLM
                         if m.role == "system" { continue; }
-                        // Skip [partial] messages saved during disconnects — incomplete data
+                        // Skip [partial] messages saved during disconnects, incomplete data
                         if m.content.starts_with("[partial] ") { continue; }
                         let content = if m.role == "assistant" {
                             crate::agent::router::strip_think_tags(&m.content)
@@ -1326,7 +1326,7 @@ async fn get_autostart_handler() -> Json<serde_json::Value> {
         Err(_) => Json(serde_json::json!({
             "enabled": false,
             "status": "unavailable",
-            "error": "systemctl not found — not running on a systemd system"
+            "error": "systemctl not found, not running on a systemd system"
         })),
     }
 }
@@ -1736,9 +1736,9 @@ fn is_lan_or_loopback(ip: std::net::IpAddr) -> bool {
         std::net::IpAddr::V4(v4) => v4.is_private(),
         std::net::IpAddr::V6(v6) => {
             let seg = v6.segments();
-            // fe80::/10 — link-local
+            // fe80::/10, link-local
             (seg[0] & 0xffc0) == 0xfe80
-            // fc00::/7 — unique local (ULA)
+            // fc00::/7, unique local (ULA)
             || (seg[0] & 0xfe00) == 0xfc00
         }
     }

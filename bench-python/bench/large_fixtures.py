@@ -8,8 +8,8 @@ well.
 This one is ~2,900 lines across 14 modules, with the signal buried in bulk that
 looks exactly like the rest of the file. The work is no longer "understand this
 function", it is "find the one that matters among two hundred that do not". That
-is a harness property — how it searches, what it keeps in context, whether it
-re-reads — rather than a model property, which is the whole point.
+is a harness property, how it searches, what it keeps in context, whether it
+re-reads, rather than a model property, which is the whole point.
 
 The bulk is generated (`_large_seed.py`) and deliberately repetitive: fourteen
 near-identical helpers per module. A harness that greps converges quickly. One

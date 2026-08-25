@@ -1,4 +1,4 @@
-"""History compaction — summarise the old half of a conversation on the cheap
+"""History compaction, summarise the old half of a conversation on the cheap
 model so a long session keeps its facts without carrying every token.
 
 Triggered by the router at `compaction_threshold` percent of `token_limit`,
@@ -9,7 +9,7 @@ from . import providers
 
 COMPACTOR_SYSTEM = """You summarise conversations from an autonomous coding agent that uses tools \
 (run_command, read_file, write_file, patch_file, search_files, git_command). Your summary REPLACES \
-the old messages — the agent will see only your summary plus the most recent turns.
+the old messages: the agent will see only your summary plus the most recent turns.
 
 Preserve:
 - File paths created, edited or read, and what was done to each
@@ -20,7 +20,7 @@ Preserve:
 Omit:
 - Pleasantries, acknowledgements, explanations of work already completed
 - Plans that were already executed (keep the result, drop the plan)
-- Code bodies — name the file and its purpose instead
+- Code bodies : name the file and its purpose instead
 
 One bullet per distinct fact. No narrative. Be terse."""
 

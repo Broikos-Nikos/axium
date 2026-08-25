@@ -112,7 +112,7 @@ pub async fn spawn_background(cmd: &str, working_dir: Option<&str>) -> Result<u3
     let mut child = builder.spawn()?;
 
     let pid = child.id()
-        .ok_or_else(|| anyhow::anyhow!("Failed to obtain child PID — process may have exited immediately"))?;
+        .ok_or_else(|| anyhow::anyhow!("Failed to obtain child PID, process may have exited immediately"))?;
 
     // Spawn a watchdog that kills the process group after the max lifetime
     tokio::spawn(async move {

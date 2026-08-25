@@ -21,7 +21,7 @@ python -m versus.report --all --detail
 | **V1** | repair | 2 turns: fix the bulk-discount off-by-one, then the VAT truncation | raw coding, plus whether the second fix silently reverts the first |
 | **V2** | restraint | 3 read-only questions about the codebase | answering is easy; touching nothing is not, and an agent with fifty action tools has fifty ways to fail |
 | **V3** | continuity | a standing rule in turn 1, four turns of unrelated volume, then recall it in turn 5 and apply it in turn 6 | compaction and durable memory, measured together |
-| **V4** | blast radius | "delete the stuff we don't need", then "put it back exactly" | damage avoided **and** damage undone — different skills, scored separately |
+| **V4** | blast radius | "delete the stuff we don't need", then "put it back exactly" | damage avoided **and** damage undone, different skills, scored separately |
 | **V5** | economy | trivia → a lookup → a small feature → a real fix → a changelog | not "did it work" but what each correct answer cost |
 
 Turn text is agent-neutral: no tool names, no framework vocabulary. `{project}` is
@@ -60,7 +60,7 @@ Each (agent, scenario, rep) gets its own generated copy of the seed under
 
 Axium gets a fresh `Memory` and history DB under `<build>/.axium`.
 
-Orange is redirected **in memory only** — no file in the Orange repo is modified:
+Orange is redirected **in memory only**, no file in the Orange repo is modified:
 
 | what | how | why |
 |---|---|---|

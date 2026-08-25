@@ -207,7 +207,7 @@ impl TelegramBot {
             return;
         }
 
-        // Handle /new command — clear the Telegram session history
+        // Handle /new command, clear the Telegram session history
         if text.trim().eq_ignore_ascii_case("/new") {
             let session_key = format!("telegram_{}", user_id);
             if let Ok(session_id) = self.state.chat_db.find_or_create_session(&session_key) {
@@ -278,7 +278,7 @@ impl TelegramBot {
         // Build agent components from config
         let sudo_pw = self.state.sudo_password.read().await.clone();
         let sudo_note = if !sudo_pw.is_empty() {
-            "\n\n## Sudo Access\nA sudo password is configured. When commands need elevated privileges, use `sudo` in run_command — the password is injected automatically and transparently. NEVER ask the user for their password."
+            "\n\n## Sudo Access\nA sudo password is configured. When commands need elevated privileges, use `sudo` in run_command: the password is injected automatically and transparently. NEVER ask the user for their password."
         } else { "" };
         let (sonnet, compactor, classifier, soul, turn_cfg, project_ctx, memory_file) = {
             let cfg = self.state.config.read().await;
@@ -371,19 +371,19 @@ impl TelegramBot {
             user details (name, contact, preferences, habits), project facts (paths, stack, commands, decisions), \
             system info (IPs, hostnames, services, hardware), recurring workflows, or anything the user mentions \
             about themselves or their work that would genuinely help in future sessions. \
-            Only save durable, reusable facts — not one-off task details or things mentioned in passing. \
-            You MUST use update_memory — this is the only way to retain information across sessions. \
+            Only save durable, reusable facts, not one-off task details or things mentioned in passing. \
+            You MUST use update_memory: this is the only way to retain information across sessions. \
             Organize into sections: User Info, Preferences, Projects, Workflows, System, Notes.\n\n\
             ## Tool Use Protocol\n\
             CRITICAL: You are an EXECUTION agent, not a narration agent.\n\
             - When a task requires creating files, calling commands, or any action: call write_file, run_command, etc. IMMEDIATELY.\n\
             - NEVER say \"I'll write the script now\" or \"Let me create the file\" and then end your turn. \
             The moment you decide to do something, emit the tool_use call in the SAME response.\n\
-            - Do NOT output code in markdown blocks — instead, use write_file to save it and run_command to execute it.\n\
+            - Do NOT output code in markdown blocks, instead, use write_file to save it and run_command to execute it.\n\
             - Your turn is NOT complete until you have called ALL necessary tools and delivered the final result.\n\
             - Think of each response as: plan (brief) → tool calls → result summary. Never stop at \"plan\".\n\n\
             ## Channel\n\
-            You are responding via Telegram. Keep responses concise — Telegram has a 4096 char limit per message. \
+            You are responding via Telegram. Keep responses concise, Telegram has a 4096 char limit per message. \
             Avoid excessive markdown formatting. Use plain text or minimal formatting.{sudo_note}",
             soul, turn_cfg.working_directory, sudo_note = sudo_note
         );
@@ -511,7 +511,7 @@ impl TelegramBot {
                     }
                 }
                 AgentEvent::Done => break,
-                _ => {} // Plan, MemoryUpdate, Classified, AskUser — skip for Telegram
+                _ => {} // Plan, MemoryUpdate, Classified, AskUser, skip for Telegram
             }
         }
 

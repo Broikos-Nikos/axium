@@ -80,7 +80,7 @@ def run(cfg=None, workdir=None):
     db = Db(cfg.resolve_data_path("chat_history.db"))
     session = db.ensure_session("cli", "CLI")
 
-    print(f"{cfg.agent_name} — {cfg.models.primary} (providers: {', '.join(available)})")
+    print(f"{cfg.agent_name}, {cfg.models.primary} (providers: {', '.join(available)})")
     print(f"working dir: {workdir}")
     print(_dim("/help for commands"))
 
@@ -146,7 +146,7 @@ def run(cfg=None, workdir=None):
             elif kind == "compacted":
                 print(_dim(f"[compacted -> {payload['messages']} messages]"), file=sys.stderr)
             elif kind == "retry":
-                print(_dim("[incomplete — continuing]"), file=sys.stderr)
+                print(_dim("[incomplete, continuing]"), file=sys.stderr)
             elif kind == "review":
                 print(_dim(f"[review] {payload}"), file=sys.stderr)
 

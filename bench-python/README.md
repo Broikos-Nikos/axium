@@ -8,7 +8,7 @@ draw a wrong conclusion.
 | suite | answers |
 |---|---|
 | `bench` | which model, and which routing knobs, are best for Axium? |
-| `versus` | Axium or Orange — which agent **design** wins? |
+| `versus` | Axium or Orange, which agent **design** wins? |
 
 The Rust implementation is measured by `bench-rust/`, which runs the *same*
 scenarios through the *same* graders and writes the *same* JSONL rows, so a row
@@ -23,13 +23,13 @@ cd bench-python
 pip install -r requirements.txt          # one dependency: requests
 ```
 
-The harness imports the agent it measures rather than vendoring a copy — a
+The harness imports the agent it measures rather than vendoring a copy, a
 vendored copy drifts, and then you are benchmarking a stale agent without knowing
 it. It looks for the package in this order:
 
-1. `AXIUM_PYTHON` — an explicit path to the directory **containing** the `axium`
+1. `AXIUM_PYTHON`, an explicit path to the directory **containing** the `axium`
    package
-2. `../python` — the layout inside the axium repo
+2. `../python`, the layout inside the axium repo
 3. whatever is already importable
 
 ```powershell
@@ -48,7 +48,7 @@ python -m versus.runner --sanity
 
 ---
 
-## `bench` — 20 scenarios, one agent, many models
+## `bench`, 20 scenarios, one agent, many models
 
 Twenty scenarios in five families, each against a freshly generated copy of a
 seed project with planted defects:
@@ -79,7 +79,7 @@ python -m bench.report --all                          # aggregate every log on f
 python -m bench.report --scenarios --tools            # per-scenario and per-tool
 ```
 
-Logs land in `bench/logs/<model>__<mode>[__knobs].jsonl` — one file per
+Logs land in `bench/logs/<model>__<mode>[__knobs].jsonl`, one file per
 configuration, so `--continuation ""` never averages into the default config's
 numbers.
 
@@ -88,13 +88,13 @@ numbers.
 It asserts that the acceptance suite passes on an untouched seed and that every
 fix grader *fails* before an agent touches anything. Without both, a green score
 could just mean the grader is broken. The runner refuses to start a paid run
-until sanity is clean. **Do not pass `--no-sanity` to get past a failure** —
+until sanity is clean. **Do not pass `--no-sanity` to get past a failure**,
 sanity failing means the graders are measuring nothing, so any score from that
 run is meaningless. Fix the grader or the seed first.
 
 ---
 
-## `versus` — Axium against Orange
+## `versus`, Axium against Orange
 
 Both agents are driven through the same five multi-turn sessions, on
 byte-identical fresh copies of the same seed project, graded by code neither of
@@ -153,7 +153,7 @@ directory. No suite touches a real project. `--keep` leaves the build
 directories behind for inspection.
 
 One scenario deliberately asks an agent to delete things. It is safe because the
-target is a generated copy — but do not "helpfully" repoint a runner at a real
+target is a generated copy, but do not "helpfully" repoint a runner at a real
 project directory.
 
 ---
@@ -167,19 +167,19 @@ project directory.
   project state via `versus/graders.py`, never from what the agent says it did.
 - **pricing:** an unpriced model still runs but reports `$0.0000`, which silently
   corrupts every cost comparison. The meter lists such models under
-  `unpriced_models` — check that field after adding one.
+  `unpriced_models`: check that field after adding one.
 
 ---
 
 ## Troubleshooting
 
-**`bench-python cannot find the axium package`** — set `AXIUM_PYTHON` to the
+**`bench-python cannot find the axium package`**: set `AXIUM_PYTHON` to the
 directory containing it, as printed in the error.
 
-**`ModuleNotFoundError: No module named 'versus'`** — run from `bench-python/`.
+**`ModuleNotFoundError: No module named 'versus'`**: run from `bench-python/`.
 All `python -m ...` commands assume that working directory.
 
-**`ModuleNotFoundError: No module named 'PySide6'`** during an Orange run —
+**`ModuleNotFoundError: No module named 'PySide6'`** during an Orange run,
 harmless. Orange's evals import it transitively; headless it logs a traceback for
 its settings watcher and carries on.
 
@@ -192,5 +192,5 @@ emits a row per *failure* plus one "suite exits clean" row, so `1/1` means
 nothing broke; a red run expands to show exactly what the agent broke.
 
 **Numbers look worse than last week.** Check the log tag before concluding
-anything — `bench/logs` splits by configuration, and comparing a `noroute` or
+anything, `bench/logs` splits by configuration, and comparing a `noroute` or
 `simple` file against a default one is comparing two different agents.

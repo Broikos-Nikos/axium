@@ -1,4 +1,4 @@
-//! Typed, importance-scored facts — the half of memory the model does not have
+//! Typed, importance-scored facts, the half of memory the model does not have
 //! to remember to write.
 //!
 //! `memory::store::Memory` is a markdown file the agent edits deliberately via
@@ -109,7 +109,7 @@ fn now_ts() -> f64 {
 /// Redact anything credential-shaped before it can be persisted.
 ///
 /// Facts render into the system prompt on every request, and nothing here was
-/// reviewed by a human first — this store is written automatically.
+/// reviewed by a human first: this store is written automatically.
 pub fn sanitize(value: &str) -> String {
     let stage1 = sk_key_rx().replace_all(value, REDACTED).into_owned();
     cred_assign_rx()

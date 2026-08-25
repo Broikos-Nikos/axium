@@ -1,4 +1,4 @@
-//! bench-rust — drive the real `axium` binary through the shared scenarios.
+//! bench-rust, drive the real `axium` binary through the shared scenarios.
 //!
 //! `bench-python` measures the Python implementation by importing it. This
 //! measures the Rust implementation by *running it*: one `axium --once` process
@@ -76,7 +76,7 @@ impl Args {
 }
 
 const HELP: &str = "\
-bench-rust — benchmark the Rust axium binary through the shared scenarios
+bench-rust, benchmark the Rust axium binary through the shared scenarios
 
   --sanity              validate the graders and exit (free, no API calls)
   --list                list scenarios and exit
@@ -343,7 +343,7 @@ fn run_scenario(ctx: &Ctx, sc: &Value) -> Value {
     // ── the turns ──
     // A scenario may need more than one. `--session` carries history, memory and
     // facts across the separate processes, so several `--once` invocations behave
-    // as one conversation — which is what M1 is actually testing.
+    // as one conversation, which is what M1 is actually testing.
     let session = format!("bench-{id}-{}", chrono::Local::now().format("%H%M%S%f"));
     let run_turn = |text: &str, err: &mut Option<String>| -> Value {
         if err.is_some() || text.is_empty() {

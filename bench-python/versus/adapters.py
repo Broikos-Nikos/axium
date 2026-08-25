@@ -133,7 +133,7 @@ class AxiumAdapter:
         self._memory = Memory(os.path.join(home, "memory.md"))
         self._db = Db(os.path.join(home, "history.db"))
         # The fact store must live INSIDE the build. Left at its configured
-        # default it resolves next to config.json — one global facts.db shared by
+        # default it resolves next to config.json, one global facts.db shared by
         # every scenario and every run, so a later run could pass because the
         # threshold was stored last time rather than because the agent remembered
         # it this session. A benchmark that can pass without the behaviour is
@@ -184,7 +184,7 @@ class AxiumAdapter:
 class OrangeAdapter:
     """Drives Orange's real Conversation loop, isolated from the user's assistant.
 
-    Three things are redirected for the duration of a run, in memory only — no file
+    Three things are redirected for the duration of a run, in memory only, no file
     in the Orange repo is modified: the project search root (so `{project}` is the
     build), the conversation/memory SQLite (so nothing leaks in or out), and the
     tool dispatcher (so every call is recorded).
@@ -194,7 +194,7 @@ class OrangeAdapter:
     def __init__(self, root=None, chat_model=None, coder_model=None):
         self.root = os.path.abspath(root or ORANGE_ROOT_DEFAULT)
         if not os.path.isdir(os.path.join(self.root, "src", "orange")):
-            raise SystemExit(f"orange not found at {self.root} — pass --orange-root")
+            raise SystemExit(f"orange not found at {self.root}, pass --orange-root")
         for p in (self.root, os.path.join(self.root, "src")):
             if p not in sys.path:
                 sys.path.insert(0, p)
@@ -232,7 +232,7 @@ class OrangeAdapter:
         self._prev_db = convstore._DB
         convstore._DB = os.path.join(home, "orange.db")
 
-        # 3. record every tool call. ask_user questions feed TurnResult.asked —
+        # 3. record every tool call. ask_user questions feed TurnResult.asked,
         #    the same field Axium's ask_user populates, so V4's "pushed back or
         #    asked first" reads both agents through one channel.
         self._events = []

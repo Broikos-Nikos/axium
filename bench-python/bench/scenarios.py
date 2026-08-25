@@ -1,4 +1,4 @@
-"""The benchmark scenarios — 20 across five families.
+"""The benchmark scenarios, 20 across five families.
 
     fix       (6)  a planted defect the agent must diagnose and correct
     refactor  (3)  restructure without changing behaviour
@@ -16,7 +16,7 @@ from the function that contains it.
 from . import grade
 
 AWARE_PREFIX = (
-    "READ-ONLY ANALYSIS. Do NOT create, edit or delete any file — investigate the "
+    "READ-ONLY ANALYSIS. Do NOT create, edit or delete any file, investigate the "
     "code and answer the question. Name the SPECIFIC files and functions involved "
     "in your final answer.\n\nQUESTION: ")
 
@@ -78,7 +78,7 @@ SCENARIOS = [
     _s("R3", "give Order a total() method", "refactor",
        "Add a total() method to the Order dataclass in shop/models.py that returns the same "
        "value orders.order_total(order) returns, so callers can just write order.total(). "
-       "Do not duplicate the calculation — reuse the existing one, and watch out for a "
+       "Do not duplicate the calculation, reuse the existing one, and watch out for a "
        "circular import between models.py and orders.py.",
        grade.g_r3, difficulty=3),
 
@@ -147,7 +147,7 @@ def _b_memory(turn, build):
     # (update_memory) and the typed fact store (remember_fact). Persisting via
     # either satisfies the user's "save it to your persistent memory", and both
     # survive a restart. Requiring update_memory specifically scored a correct
-    # agent 0/3 the moment the fact store shipped — the grader was measuring an
+    # agent 0/3 the moment the fact store shipped: the grader was measuring an
     # implementation detail, not the behaviour.
     tools = [t["name"] for t in turn.meter.tool_calls]
     persisted = "update_memory" in tools or "remember_fact" in tools
@@ -258,7 +258,7 @@ def _m_runtime_safe_rename(turn, build):
 
     `report.py` imports `line_total_for_report` from `pricing.py` at module
     level. Rename the definition and miss the caller and every file still
-    parses — `get_diagnostics` sees nothing — but importing report.py raises.
+    parses, `get_diagnostics` sees nothing, but importing report.py raises.
     This is the defect class runtime verification exists for, and the only
     scenario here that a syntax check cannot score.
     """

@@ -71,7 +71,7 @@ TOOLS = [
     _t("scan_project",
        "Build an annotated file tree of a project: each source file is listed with "
        "the top-level symbols it defines. Much cheaper than listing then reading "
-       "every file — use this first on an unfamiliar codebase.",
+       "every file: use this first on an unfamiliar codebase.",
        {"path": {"type": "string"}, "max_depth": {"type": "integer", "description": "Default 4"}}),
 
     _t("git_command", "Run a git command (status, diff, log, add, commit, ...).",
@@ -98,7 +98,7 @@ TOOLS = [
 
     _t("get_dependency_graph",
        "Show which files import a given file (dependents) and what it imports "
-       "(dependencies) — the impact radius of changing it.",
+       "(dependencies), the impact radius of changing it.",
        {"path": {"type": "string"},
         "direction": {"type": "string", "enum": ["dependents", "dependencies", "both"]}},
        ["path"]),
@@ -136,7 +136,7 @@ TOOLS = [
 
     _t("run_subagent",
        "Delegate a self-contained sub-task to a fresh agent with no conversation "
-       "history. Give it everything it needs — it has no context from this chat. "
+       "history. Give it everything it needs: it has no context from this chat. "
        "Sub-agents cannot spawn further sub-agents.",
        {"task": {"type": "string"},
         "model": {"type": "string", "enum": ["fast", "primary"],
@@ -152,7 +152,7 @@ TOOLS = [
        "Revert file changes from an earlier turn using the snapshots taken before "
        "each write: edited files are restored byte-for-byte and files that turn "
        "created are removed. Use this when asked to put something back or undo "
-       "what you just did — it is exact, unlike rewriting the files from memory. "
+       "what you just did: it is exact, unlike rewriting the files from memory. "
        "action='list' shows what can be undone.",
        {"action": {"type": "string", "enum": ["undo", "list"],
                    "description": "Default 'undo'"},

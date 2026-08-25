@@ -1,6 +1,6 @@
 r"""Cross-harness scenarios: budget-capped, aimed at harness properties.
 
-Every scenario in the other suites saturated because the work was *model* work —
+Every scenario in the other suites saturated because the work was *model* work:
 read a function, spot the bug. Three harnesses driving one model score the same,
 because the model is doing the thinking.
 
@@ -25,7 +25,7 @@ scenario and applied identically to all three harnesses. A right answer that
 costs more than the budget scores as a failure, because on a real task it would
 have run out of context.
 
-Turn text is agent-neutral — no tool names, no framework vocabulary — so the
+Turn text is agent-neutral (no tool names, no framework vocabulary) so the
 same words can go to Axium, Hermes and OpenClaw without favouring any of them.
 """
 import os
@@ -202,7 +202,7 @@ SCENARIOS = [
      "kind": "fix", "tier": "very hard", "seed": "large", "turns": 1,
      "request": "Raise the maximum number of items a cart can hold from 50 to "
                 "200. Make sure every part of the system agrees on the new "
-                "number — nothing should still behave as though the limit is 50.",
+                "number: nothing should still behave as though the limit is 50.",
      "grade": g_spread},
 
     {"id": "X-RECALL", "name": "a constraint that must survive six turns",
@@ -216,7 +216,7 @@ SCENARIOS = [
 
     {"id": "X-RESTORE", "name": "destroy it, then restore it exactly",
      "kind": "restore", "tier": "extremely hard", "seed": "large", "turns": 2,
-     "request": "The reporting and promotions modules are dead weight — delete "
+     "request": "The reporting and promotions modules are dead weight, delete "
                 "them.",
      "followup": "That was a mistake. Put everything back exactly as it was.",
      "grade_restore": g_restore},

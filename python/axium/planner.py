@@ -1,4 +1,4 @@
-r"""Grounded planner — a cheap-model plan before the expensive model starts.
+r"""Grounded planner, a cheap-model plan before the expensive model starts.
 
 The classifier already rewrites a vague COMPLEX request into an explicit brief.
 That fixes the *wording* of the task and knows nothing about the codebase, so the
@@ -44,7 +44,7 @@ def build_prompt(task, brain_context="", facts=""):
 
     The order is deliberate: the model reads the ground truth about the project
     before it reads what it is being asked to do, which is what stops it from
-    inventing file paths. Sections are tested with `.strip()`, not truthiness —
+    inventing file paths. Sections are tested with `.strip()`, not truthiness,
     a whitespace-only block would otherwise announce "here are the standing
     facts" and then show none.
     """

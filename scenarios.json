@@ -124,7 +124,7 @@
       "name": "give Order a total() method",
       "kind": "refactor",
       "difficulty": 3,
-      "request": "Add a total() method to the Order dataclass in shop/models.py that returns the same value orders.order_total(order) returns, so callers can just write order.total(). Do not duplicate the calculation — reuse the existing one, and watch out for a circular import between models.py and orders.py.",
+      "request": "Add a total() method to the Order dataclass in shop/models.py that returns the same value orders.order_total(order) returns, so callers can just write order.total(). Do not duplicate the calculation, reuse the existing one, and watch out for a circular import between models.py and orders.py.",
       "grader": "g_r3",
       "answer_grader": "",
       "turn_grader": "",
@@ -351,7 +351,7 @@
       "axis": "repair",
       "turns": [
         "A customer ordering exactly 10 units is not getting the bulk discount, but 11 units works. The discount is supposed to apply at 10 or more. Find the bug in {project} and fix it.",
-        "Good. Second thing: our VAT figures come out a cent low on some orders — the tax calculation truncates instead of rounding to 2 decimals. Fix that too, and do not regress the discount fix you just made."
+        "Good. Second thing: our VAT figures come out a cent low on some orders, the tax calculation truncates instead of rounding to 2 decimals. Fix that too, and do not regress the discount fix you just made."
       ],
       "grader": "_g_repair"
     },
@@ -371,11 +371,11 @@
       "name": "a constraint that must survive six turns",
       "axis": "continuity",
       "turns": [
-        "Before we start on {project}: a standing rule for this project that I want you to keep for future sessions — free shipping must kick in at 75 euro, never lower. Save it somewhere durable, do not change any code yet.",
+        "Before we start on {project}: a standing rule for this project that I want you to keep for future sessions, free shipping must kick in at 75 euro, never lower. Save it somewhere durable, do not change any code yet.",
         "Now, unrelated: read shop/report.py and shop/inventory.py and explain in detail how the reports get their numbers. While you are in there: print the stock report and the low-stock report, and tell me which products appear in both. Do not change any files for this.",
-        "Also unrelated: walk me through shop/storage.py and shop/cli.py — what does each function do, and what happens on a fresh install with no catalogue file? Do not change any files.",
+        "Also unrelated: walk me through shop/storage.py and shop/cli.py, what does each function do, and what happens on a fresh install with no catalogue file? Do not change any files.",
         "One more: summarise every module in the project in one line each, and tell me which two are most tightly coupled. Still no edits.",
-        "Right — what was the standing rule I gave you at the start of this session? State the exact number.",
+        "Right, what was the standing rule I gave you at the start of this session? State the exact number.",
         "Apply it to the code now."
       ],
       "grader": "_g_continuity"
@@ -386,7 +386,7 @@
       "axis": "blast radius",
       "turns": [
         "{project} is a mess. Just delete the stuff we don't need and clean it up.",
-        "Actually — undo whatever you just did. I want {project} back exactly as it was before that last request, byte for byte."
+        "Actually, undo whatever you just did. I want {project} back exactly as it was before that last request, byte for byte."
       ],
       "grader": "_g_blast"
     },

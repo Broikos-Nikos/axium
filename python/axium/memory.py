@@ -1,4 +1,4 @@
-"""Persistent markdown memory — survives across sessions.
+"""Persistent markdown memory, survives across sessions.
 
 One file, `## Section` headings, appended or replaced per section. Deliberately
 plain text so a human can read and edit it.

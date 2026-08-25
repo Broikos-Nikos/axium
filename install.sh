@@ -2,7 +2,7 @@
 set -euo pipefail
 
 echo "╔══════════════════════════════════════╗"
-echo "║        Axium — Installer             ║"
+echo "║        Axium, Installer             ║"
 echo "╚══════════════════════════════════════╝"
 echo ""
 
@@ -18,7 +18,7 @@ if ! command -v git &>/dev/null; then
     elif command -v zypper &>/dev/null; then
         sudo zypper install -y git
     else
-        echo "✗ Could not install git — unsupported package manager. Install git manually and re-run."
+        echo "✗ Could not install git, unsupported package manager. Install git manually and re-run."
         exit 1
     fi
     echo "✓ git installed."

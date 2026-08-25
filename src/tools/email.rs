@@ -66,5 +66,5 @@ pub async fn send_email(
 
     mailer.send(email).await.context("Failed to send email")?;
 
-    Ok(format!("Email sent to {} — subject: {}", to, subject))
+    Ok(format!("Email sent to {}, subject: {}", to, subject))
 }

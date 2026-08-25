@@ -95,7 +95,7 @@ pub async fn run(state: Arc<AppState>) {
     let mut stdout = tokio::io::stdout();
     let mut lines = stdin.lines();
 
-    println!("CLI mode — type a message and press Enter. /new to reset, /quit to exit.");
+    println!("CLI mode: type a message and press Enter. /new to reset, /quit to exit.");
 
     loop {
         let _ = stdout.write_all(b"\n> ").await;
@@ -136,7 +136,7 @@ pub async fn run(state: Arc<AppState>) {
         // Build agent components from config
         let sudo_pw = state.sudo_password.read().await.clone();
         let sudo_note = if !sudo_pw.is_empty() {
-            "\n\n## Sudo Access\nA sudo password is configured. When commands need elevated privileges, use `sudo` in run_command — the password is injected automatically and transparently. NEVER ask the user for their password."
+            "\n\n## Sudo Access\nA sudo password is configured. When commands need elevated privileges, use `sudo` in run_command: the password is injected automatically and transparently. NEVER ask the user for their password."
         } else { "" };
         let (sonnet, compactor, classifier, soul, turn_cfg, project_ctx, memory_file) = {
             let cfg = state.config.read().await;
@@ -225,15 +225,15 @@ pub async fn run(state: Arc<AppState>) {
             user details (name, contact, preferences, habits), project facts (paths, stack, commands, decisions), \
             system info (IPs, hostnames, services, hardware), recurring workflows, or anything the user mentions \
             about themselves or their work that would genuinely help in future sessions. \
-            Only save durable, reusable facts — not one-off task details or things mentioned in passing. \
-            You MUST use update_memory — this is the only way to retain information across sessions. \
+            Only save durable, reusable facts, not one-off task details or things mentioned in passing. \
+            You MUST use update_memory: this is the only way to retain information across sessions. \
             Organize into sections: User Info, Preferences, Projects, Workflows, System, Notes.\n\n\
             ## Tool Use Protocol\n\
             CRITICAL: You are an EXECUTION agent, not a narration agent.\n\
             - When a task requires creating files, calling commands, or any action: call write_file, run_command, etc. IMMEDIATELY.\n\
             - NEVER say \"I'll write the script now\" or \"Let me create the file\" and then end your turn. \
             The moment you decide to do something, emit the tool_use call in the SAME response.\n\
-            - Do NOT output code in markdown blocks — instead, use write_file to save it and run_command to execute it.\n\
+            - Do NOT output code in markdown blocks, instead, use write_file to save it and run_command to execute it.\n\
             - Your turn is NOT complete until you have called ALL necessary tools and delivered the final result.\n\
             - Think of each response as: plan (brief) → tool calls → result summary. Never stop at \"plan\".\n\n\
             ## Channel\n\
@@ -292,7 +292,7 @@ pub async fn run(state: Arc<AppState>) {
             }
         });
 
-        // Drain events — stream text to stdout in real time
+        // Drain events, stream text to stdout in real time
         let mut response_text = String::new();
         let mut streaming = false;
         let mut in_think = false;
@@ -329,7 +329,7 @@ pub async fn run(state: Arc<AppState>) {
                     }
                 }
                 AgentEvent::FileOffer { path, caption } => {
-                    eprintln!("[file: {} — {}]", path, caption);
+                    eprintln!("[file: {}, {}]", path, caption);
                 }
                 AgentEvent::AskUser { question, reply_tx } => {
                     println!("\n{}", question);

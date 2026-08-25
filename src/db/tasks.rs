@@ -67,7 +67,7 @@ impl TaskDb {
             );
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, updated_at DESC);"
         )?;
-        // Migrate existing DBs — silently ignore if columns already exist
+        // Migrate existing DBs, silently ignore if columns already exist
         let _ = conn.execute_batch("ALTER TABLE tasks ADD COLUMN result TEXT NOT NULL DEFAULT ''");
         let _ = conn.execute_batch("ALTER TABLE tasks ADD COLUMN read INTEGER NOT NULL DEFAULT 0");
         let _ = conn.execute_batch("ALTER TABLE tasks ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0");
@@ -137,7 +137,7 @@ impl TaskDb {
         Ok(attempt)
     }
 
-    /// Claim a pending task atomically — returns None if none available.
+    /// Claim a pending task atomically, returns None if none available.
     pub fn claim_pending(&self) -> Result<Option<Task>> {
         let conn = self.conn();
         let now = Utc::now().to_rfc3339();

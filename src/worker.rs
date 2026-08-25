@@ -25,7 +25,7 @@ pub fn spawn_worker(state: Arc<AppState>) {
             }).await;
             match result {
                 Ok(Err(e)) => warn!(error = %e, "Background worker error"),
-                Err(e) => warn!(error = %e, "Background worker task panicked — recovering"),
+                Err(e) => warn!(error = %e, "Background worker task panicked, recovering"),
                 _ => {}
             }
         }
@@ -117,14 +117,14 @@ async fn append_task_log(task_id: i64, line: &str, buffers: &TaskBuffers) {
 fn attempt_guidance(attempt: i64, max_attempts: i64, prev_failure: &str) -> String {
     if attempt == 0 {
         "Take your time and be thorough. Verify your work before finishing. \
-        Use tools to actually perform the task — do not just describe what you would do."
+        Use tools to actually perform the task, do not just describe what you would do."
             .to_string()
     } else if attempt + 1 >= max_attempts {
         format!(
             "FINAL ATTEMPT. Previous attempt failed: {}\n\
             You MUST deliver a concrete result NOW. If you cannot complete perfectly, \
             deliver what you can with clear notes on what remains incomplete. \
-            Do NOT end your turn without producing real output — files created, commands run, \
+            Do NOT end your turn without producing real output, files created, commands run, \
             or concrete deliverables.",
             prev_failure
         )
@@ -267,11 +267,11 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
 
         let guidance = attempt_guidance(task.attempt, task.max_attempts, &prev_failure);
 
-        // Worker soul — focused on autonomous execution with attempt awareness
+        // Worker soul, focused on autonomous execution with attempt awareness
         let worker_soul = format!(
-            "{}\n\n[WORKER MODE — AGENTIC TASK EXECUTION]\n\
+            "{}\n\n[WORKER MODE, AGENTIC TASK EXECUTION]\n\
             You are running as a background task worker. Complete the task fully and autonomously.\n\
-            Do not ask for clarification — make reasonable assumptions and proceed.\n\
+            Do not ask for clarification, make reasonable assumptions and proceed.\n\
             \n## Task\n{}\n\
             \n## Context\n{}\n\
             \n## Attempt {}/{}\n{}\n",
@@ -295,7 +295,7 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
         // Write initial task state file (buffered)
         write_task_file(&tdir, &task, "- Starting task execution\n", "", &task_buffers).await;
 
-        // Drain events in background — forward progress to UI and task file
+        // Drain events in background, forward progress to UI and task file
         let broadcast_tx = state.broadcast_tx.clone();
         let task_id = task.id;
         let task_buffers_drain = Arc::clone(&task_buffers);
@@ -305,7 +305,7 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
                 match event {
                     AgentEvent::Text(text) => { output = text; }
                     AgentEvent::AskUser { reply_tx, .. } => {
-                        // Auto-approve in worker mode — no human to ask
+                        // Auto-approve in worker mode, no human to ask
                         let _ = reply_tx.send("yes".to_string());
                     }
                     AgentEvent::ToolCall { ref name, .. } => {
@@ -371,19 +371,19 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
                 let new_attempt = state.task_db.increment_attempt(task.id)
                     .unwrap_or(task.attempt + 1);
                 if new_attempt >= task.max_attempts {
-                    // Force finish — deliver partial results
-                    info!(id = task.id, attempt = new_attempt, "Task verification failed on final attempt — force finishing");
+                    // Force finish, deliver partial results
+                    info!(id = task.id, attempt = new_attempt, "Task verification failed on final attempt, force finishing");
                     append_task_log(task.id, &format!("Verification FAILED (final attempt): {}", reason), &task_buffers).await;
-                    let partial = format!("[PARTIAL — verification failed: {}]\n\n{}", reason, raw_result);
+                    let partial = format!("[PARTIAL, verification failed: {}]\n\n{}", reason, raw_result);
                     let mut final_task = task.clone();
                     final_task.status = "done".to_string();
                     final_task.attempt = new_attempt;
                     write_task_file(&tdir, &final_task, "", &partial, &task_buffers).await;
                     ("done".to_string(), partial)
                 } else {
-                    // Retry — set back to pending with failure context
-                    info!(id = task.id, attempt = new_attempt, reason = %reason, "Task verification failed — scheduling retry");
-                    append_task_log(task.id, &format!("Verification FAILED: {} — retrying", reason), &task_buffers).await;
+                    // Retry: set back to pending with failure context
+                    info!(id = task.id, attempt = new_attempt, reason = %reason, "Task verification failed, scheduling retry");
+                    append_task_log(task.id, &format!("Verification FAILED: {}, retrying", reason), &task_buffers).await;
                     let failure_ctx = format!("PREVIOUS FAILURE (attempt {}): {}", new_attempt, reason);
                     let _ = state.task_db.save_task_result(task.id, &failure_ctx, "pending");
                     // Broadcast retry event
@@ -400,7 +400,7 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
                 }
             }
         } else {
-            // Agent itself failed — check retry eligibility
+            // Agent itself failed: check retry eligibility
             let new_attempt = state.task_db.increment_attempt(task.id)
                 .unwrap_or(task.attempt + 1);
             if new_attempt >= task.max_attempts {
@@ -411,8 +411,8 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
                 write_task_file(&tdir, &final_task, "", &raw_result, &task_buffers).await;
                 ("failed".to_string(), raw_result)
             } else {
-                info!(id = task.id, attempt = new_attempt, "Task execution failed — scheduling retry");
-                append_task_log(task.id, &format!("Execution FAILED: {} — retrying", raw_result), &task_buffers).await;
+                info!(id = task.id, attempt = new_attempt, "Task execution failed, scheduling retry");
+                append_task_log(task.id, &format!("Execution FAILED: {}, retrying", raw_result), &task_buffers).await;
                 let failure_ctx = format!("PREVIOUS FAILURE (attempt {}): {}", new_attempt, raw_result);
                 let _ = state.task_db.save_task_result(task.id, &failure_ctx, "pending");
                 let _ = state.broadcast_tx.send(serde_json::json!({
@@ -430,7 +430,7 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
     };
 
     if let Err(e) = state.task_db.save_task_result(task.id, &result, &status) {
-        warn!(id = task.id, error = %e, "Failed to save task result — resetting to pending");
+        warn!(id = task.id, error = %e, "Failed to save task result, resetting to pending");
         let _ = state.task_db.update_task_status(task.id, "pending");
         return Err(e);
     }
@@ -460,7 +460,7 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
     }).to_string();
     let _ = state.broadcast_tx.send(done_msg);
 
-    // Telegram notification — extract values first so the read lock is dropped before the await
+    // Telegram notification, extract values first so the read lock is dropped before the await
     let tg_notify = {
         let cfg = state.config.read().await;
         if cfg.settings.telegram_enabled && !cfg.settings.telegram_bot_token.is_empty() {

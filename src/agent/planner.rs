@@ -1,4 +1,4 @@
-//! Grounded planner — a cheap-model plan before the expensive model starts.
+//! Grounded planner, a cheap-model plan before the expensive model starts.
 //!
 //! The classifier already rewrites a vague COMPLEX request into an explicit
 //! brief. That fixes the *wording* of the task and knows nothing about the
@@ -51,7 +51,7 @@ const REFUSAL_PREFIXES: [&str; 5] = [
     "unable to",
 ];
 
-/// Truncate on a char boundary — byte-slicing a Greek or emoji value panics.
+/// Truncate on a char boundary, byte-slicing a Greek or emoji value panics.
 fn truncate_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()

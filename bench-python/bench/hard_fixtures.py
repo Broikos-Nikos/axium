@@ -14,7 +14,7 @@ solved it:
      only a description of the symptom."
 
 So: a billing engine of ~900 lines across nine modules, with real domain
-tangle — proration, tax jurisdictions, currency rounding, retries, an audit
+tangle, proration, tax jurisdictions, currency rounding, retries, an audit
 log. The planted defects are not typos. Each one is a *plausible line* that is
 wrong only in a case the obvious test does not cover, and finding it means
 reproducing the symptom first.
@@ -23,7 +23,7 @@ Invariants, enforced by `--sanity` exactly as for the small seed:
 
   1. `tests/smoke.py` PASSES on the pristine seed. It covers the happy paths a
      developer would have written, and deliberately NOT the edge cases the
-     defects live in — that is what makes them survive to be found.
+     defects live in: that is what makes them survive to be found.
   2. Every grader FAILS on the pristine seed.
 
 The gap between 1 and 2 is the whole point: a suite whose own tests catch the

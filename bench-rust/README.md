@@ -74,13 +74,13 @@ python -m bench.report --dir ..\bench-rust\logs --scenarios --tools
 
 ## How a scenario runs
 
-1. `bridge generate <build>` — a fresh seed project with its planted defects.
+1. `bridge generate <build>`, a fresh seed project with its planted defects.
 2. A per-build `config.json` is written under `<build>/.axium/` with every knob
    applied and every data path inside the build.
 3. `axium --once "<request>" --workdir <build> --config <build>/.axium/config.json`
-   — one JSON object on stdout: text, changed files, prompt class, questions
+, one JSON object on stdout: text, changed files, prompt class, questions
    asked, and the full turn metrics.
-4. `bridge grade <id> --build <build> --turn <turn.json>` — the same three-way
+4. `bridge grade <id> --build <build> --turn <turn.json>`, the same three-way
    split as the Python runner (file-tree graders for fix/refactor/feature,
    answer graders for aware, turn graders for behaviour), plus the regression
    suite.

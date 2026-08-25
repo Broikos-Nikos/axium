@@ -173,7 +173,7 @@ def main(argv=None):
     p.add_argument("--verbose", action="store_true", help="per-turn line while running")
     p.add_argument("--no-sanity", action="store_true", help="skip the pre-run grader check")
     p.add_argument("--max-turns", type=int, default=0,
-                   help="stop each session after N turns — smoke-tests the plumbing "
+                   help="stop each session after N turns, smoke-tests the plumbing "
                         "cheaply; scores from such a run are not comparable")
     # axium knobs
     p.add_argument("--config", default=None)

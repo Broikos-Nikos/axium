@@ -1,4 +1,4 @@
-//! Project Brain — durable per-project knowledge in `<project>/.axium/`.
+//! Project Brain, durable per-project knowledge in `<project>/.axium/`.
 //!
 //! Axium re-derives a project's shape on every session. `scan_project` is cheap,
 //! but the reasoning built on top of it is not: in the head-to-head benchmark the
@@ -13,7 +13,7 @@
 //!                 generated only when missing, and a human-written one is never
 //!                 clobbered (the marker tells them apart).
 //!   overview.md   annotated structure, rebuilt when the CODE changes rather than
-//!                 on a wall-clock TTL — a fingerprint, not a timer.
+//!                 on a wall-clock TTL, a fingerprint, not a timer.
 //!   fingerprint   the hash overview.md was built from.
 //!   journal.md    newest-first log of what changed and why, so "continue where
 //!                 we left off" survives a restart.
@@ -107,7 +107,7 @@ fn write(path: &Path, text: &str) -> bool {
     fs::rename(&tmp, path).is_ok()
 }
 
-/// Truncate on a char boundary — byte-slicing a Greek or emoji value panics.
+/// Truncate on a char boundary, byte-slicing a Greek or emoji value panics.
 fn truncate_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -168,7 +168,7 @@ fn collect_fingerprint_entries(root: &Path, dir: &Path, out: &mut Vec<String>) {
         }
         // Milliseconds, not seconds. A one-character edit keeps the file the same
         // size, and at second precision an edit made within the same second as the
-        // last scan is invisible — the agent then reasons from a stale overview
+        // last scan is invisible, the agent then reasons from a stale overview
         // for the rest of the session. Caught by a test that did exactly that.
         let mtime = meta
             .modified()

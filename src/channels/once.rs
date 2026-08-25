@@ -1,6 +1,6 @@
 //! `--once`: run a single turn non-interactively and print one JSON line.
 //!
-//! Every other channel is a conversation — a REPL, a web socket, a Telegram
+//! Every other channel is a conversation, a REPL, a web socket, a Telegram
 //! chat. None of them can be driven by a benchmark harness, which needs to hand
 //! the agent one message, wait, and read back exactly what happened and what it
 //! cost. Without this, `bench-rust/` has nothing to drive.
@@ -12,7 +12,7 @@
 //!
 //! One JSON object on **stdout**, everything else on stderr, so a caller can
 //! parse stdout without filtering log noise. The object carries the turn's text,
-//! the files it changed, the prompt class, and the full `TurnMetrics` — tokens,
+//! the files it changed, the prompt class, and the full `TurnMetrics`, tokens,
 //! per-role cost split, tool histogram, wall time.
 //!
 //! Exit code is 0 when the turn ran, 1 when it could not. A turn that ran and
@@ -197,7 +197,7 @@ pub async fn run(state: Arc<AppState>, args: OnceArgs) -> Result<i32> {
     // `ok` means the turn PRODUCED something, not merely that no Rust error
     // propagated. The router swallows an auth failure and returns empty text, so
     // a bare `Ok(_)` here would report a turn that made four failed API calls and
-    // did nothing as a success — and a benchmark would score it as one.
+    // did nothing as a success, and a benchmark would score it as one.
     let produced = !text.trim().is_empty() || !changed.is_empty();
     let ok = ran && produced;
     let error = error.or_else(|| {

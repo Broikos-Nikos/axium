@@ -1291,7 +1291,7 @@
         <label class="settings-label">Sudo Password</label>
         <div id="sudo-password-status" class="key-status"></div>
         <input type="password" class="settings-input" id="sudo-password-input" placeholder="Enter password for sudo operations..." autocomplete="off">
-        <div class="settings-hint">Stored in memory only — never saved to disk. Enables elevated commands.</div>
+        <div class="settings-hint">Stored in memory only, never saved to disk. Enables elevated commands.</div>
       </div>
 
       <hr class="settings-divider">
@@ -1322,7 +1322,7 @@
       <div class="settings-group">
         <label class="settings-label">Max Tool Iterations</label>
         <input type="number" class="settings-input" id="max-iterations-input" min="5" max="100" value="15">
-        <div class="settings-hint">Maximum tool calls per turn (5–100). Higher allows more complex tasks.</div>
+        <div class="settings-hint">Maximum tool calls per turn (5-100). Higher allows more complex tasks.</div>
       </div>
       <div class="settings-group">
         <label class="settings-label">Working Directory</label>
@@ -1678,7 +1678,7 @@
         break;
 
       case 'text_delta':
-        // Classifier is done — main model is now writing
+        // Classifier is done, main model is now writing
         if (superchargePhase) {
           superchargePhase = false;
           updateThinkingStatus('responding', 'Writing response...');
@@ -1687,7 +1687,7 @@
         break;
 
       case 'assistant':
-        // Final complete message — finalize current assistant bubble
+        // Final complete message, finalize current assistant bubble
         finalizeAssistant(data.text);
         totalMsgs++;
         totalChars += data.text.length;
@@ -1695,7 +1695,7 @@
         break;
 
       case 'retry':
-        // Heartbeat decided the response was incomplete — discard the partial bubble.
+        // Heartbeat decided the response was incomplete, discard the partial bubble.
         if (currentAssistantEl) {
           const bubble = currentAssistantEl.parentElement;
           if (bubble) bubble.remove();
@@ -1751,7 +1751,7 @@
         break;
 
       case 'trivial_answer':
-        // Fast answer from classifier — no need for main model
+        // Fast answer from classifier, no need for main model
         break;
 
       case 'history_user':
@@ -1801,7 +1801,7 @@
         break;
 
       case 'task_started':
-        addChatMessage('system', `▶ Running background task: "${data.title}" (#${data.id}) — attempt ${data.attempt || 1}/${data.max_attempts || 3}`);
+        addChatMessage('system', `▶ Running background task: "${data.title}" (#${data.id}), attempt ${data.attempt || 1}/${data.max_attempts || 3}`);
         if (activeTasks[data.id]) {
           activeTasks[data.id].status = 'running';
           activeTasks[data.id].attempt = data.attempt || 1;
@@ -1821,7 +1821,7 @@
         break;
 
       case 'task_retry':
-        addChatMessage('system', `🔄 Task #${data.id} "${data.title}" verification failed — retrying (attempt ${data.attempt}/${data.max_attempts}): ${data.reason}`);
+        addChatMessage('system', `🔄 Task #${data.id} "${data.title}" verification failed, retrying (attempt ${data.attempt}/${data.max_attempts}): ${data.reason}`);
         if (activeTasks[data.id]) {
           activeTasks[data.id].status = 'pending';
           activeTasks[data.id].attempt = data.attempt;
@@ -1845,7 +1845,7 @@
       }
 
       case 'autonomous_mode':
-        addChatMessage('system', data.enabled ? '🤖 Autonomous mode ON — agent will chain turns.' : '🤖 Autonomous mode OFF.');
+        addChatMessage('system', data.enabled ? '🤖 Autonomous mode ON, agent will chain turns.' : '🤖 Autonomous mode OFF.');
         break;
 
       case 'autonomous_turn':
@@ -1858,7 +1858,7 @@
 
       case 'recovery':
         if (data.removed > 0) {
-          addChatMessage('system', `🧹 Conversation optimized — ${data.removed} redundant messages cleaned.`);
+          addChatMessage('system', `🧹 Conversation optimized, ${data.removed} redundant messages cleaned.`);
         }
         break;
 
@@ -1996,7 +1996,7 @@
   }
 
   function renderMarkdown(text) {
-    // Strip internal XML blocks — not for display
+    // Strip internal XML blocks, not for display
     text = text.replace(/<tool_log>[\s\S]*?<\/tool_log>/g, '');
     text = text.replace(/<tool_trace>[\s\S]*?<\/tool_trace>/g, '');
     text = text.replace(/<\/?(?:invoke|parameter|tool_use|plan|think(?:ing)?)[^>]*>/g, '');
@@ -2142,7 +2142,7 @@
     const sidebar = document.querySelector('.sessions-sidebar');
     if (sidebar) sidebar.classList.toggle('processing', val);
     if (val) {
-      // Indicator takes space below chat — re-scroll after layout settles so
+      // Indicator takes space below chat, re-scroll after layout settles so
       // the last message bubble isn't hidden behind it.
       requestAnimationFrame(() => { chatMessages.scrollTop = chatMessages.scrollHeight; });
     } else {
@@ -2429,7 +2429,7 @@
       const data = await resp.json();
       if (data.ok) {
         autostartStatus.textContent = autostartInput.checked
-          ? 'Autostart enabled — will start on next boot.'
+          ? 'Autostart enabled, will start on next boot.'
           : 'Autostart disabled.';
       } else {
         autostartStatus.textContent = 'Error: ' + (data.error || 'Unknown error');
@@ -2499,7 +2499,7 @@
           chatInput.placeholder = `Ask ${agentName} anything...`;
           thinkingEl.childNodes[1].textContent = ` ${agentName} is thinking...`;
         }
-        showToast('Settings saved — changes apply to next message.');
+        showToast('Settings saved, changes apply to next message.');
       } else {
         settingsSave.textContent = 'Error: ' + (result.error || 'Unknown');
         setTimeout(() => { settingsSave.textContent = 'Save Settings'; settingsSave.disabled = false; }, 2000);

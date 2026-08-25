@@ -1,4 +1,4 @@
-"""Axium — self-hosted autonomous coding agent (Python implementation).
+"""Axium, self-hosted autonomous coding agent (Python implementation).
 
 A faithful port of the Rust agent in ../src: same tool names, same classifier ->
 tool-loop -> review pipeline, same cost-routing between a primary and a cheap

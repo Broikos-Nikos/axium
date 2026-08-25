@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # ─────────────────────────────────────────────────────────────
-# Axium — Full Setup Script
+# Axium, Full Setup Script
 # Works on: Raspberry Pi (Debian/Pi OS) and Fedora/Arch PCs
 #
 # Usage:
-#   sudo bash setup.sh            — full install / resume
-#   sudo bash setup.sh --rebuild  — force recompile binary
+#   sudo bash setup.sh, full install / resume
+#   sudo bash setup.sh --rebuild, force recompile binary
 # ─────────────────────────────────────────────────────────────
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
@@ -38,7 +38,7 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 CARGO_BIN="$ACTUAL_HOME/.cargo/bin/cargo"
 
 # ── Detect distro and arch ────────────────────────────────────
-[ -f /etc/os-release ] || error "Cannot detect distribution — /etc/os-release missing."
+[ -f /etc/os-release ] || error "Cannot detect distribution, /etc/os-release missing."
 # shellcheck source=/dev/null
 . /etc/os-release
 DISTRO="${ID:-unknown}"
@@ -47,7 +47,7 @@ TOTAL_RAM_MB=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo)
 
 echo ""
 echo "  ╔══════════════════════════════════════════════╗"
-echo "  ║         Axium — Full Setup Script            ║"
+echo "  ║         Axium, Full Setup Script            ║"
 echo "  ╚══════════════════════════════════════════════╝"
 echo ""
 info "User:    $ACTUAL_USER  ($ACTUAL_HOME)"
@@ -59,32 +59,32 @@ step "1/11  Source update"
 # ═══════════════════════════════════════════════════════════════
 
 if [ -d "$PROJECT_DIR/.git" ] && command -v git &>/dev/null; then
-    info "Git repository detected — checking for updates..."
+    info "Git repository detected, checking for updates..."
     GIT_OUT=$(su - "$ACTUAL_USER" -c "cd '$PROJECT_DIR' && git pull --ff-only 2>&1") || true
     if echo "$GIT_OUT" | grep -q "Already up to date"; then
         ok "Source is up to date"
     elif echo "$GIT_OUT" | grep -qE "Updating|Fast-forward"; then
-        ok "Source updated from remote — forcing rebuild"
+        ok "Source updated from remote, forcing rebuild"
         FORCE_REBUILD="--rebuild"
     else
         warn "git pull: $GIT_OUT"
-        note "Could not update source — proceeding with existing code."
+        note "Could not update source, proceeding with existing code."
     fi
 else
-    ok "Not a git repository — skipping source update"
+    ok "Not a git repository, skipping source update"
 fi
 
 # ═══════════════════════════════════════════════════════════════
 step "2/11  Pre-flight checks"
 # ═══════════════════════════════════════════════════════════════
 
-# config.json — copy from example if missing, or generate a default
+# config.json, copy from example if missing, or generate a default
 if [ ! -f "$CONFIG" ]; then
     if [ -f "$PROJECT_DIR/config.example.json" ]; then
         mv "$PROJECT_DIR/config.example.json" "$CONFIG"
-        ok "Renamed config.example.json → config.json — edit it to add your API keys"
+        ok "Renamed config.example.json → config.json: edit it to add your API keys"
     else
-        warn "config.example.json not found — generating a default config.json"
+        warn "config.example.json not found, generating a default config.json"
         cat > "$CONFIG" <<'DEFAULTCONFIG'
 {
   "api_keys": { "anthropic": "sk-ant-...", "openai": "sk-proj-..." },
@@ -113,13 +113,13 @@ if [ ! -f "$CONFIG" ]; then
   }
 }
 DEFAULTCONFIG
-        ok "Created default config.json — edit it to add your API keys"
+        ok "Created default config.json: edit it to add your API keys"
     fi
 else
     ok "config.json found"
 fi
 
-# soul.md — copy from example if missing
+# soul.md, copy from example if missing
 if [ ! -f "$PROJECT_DIR/soul.md" ]; then
     if [ -f "$PROJECT_DIR/soul.example.md" ]; then
         cp "$PROJECT_DIR/soul.example.md" "$PROJECT_DIR/soul.md"
@@ -132,7 +132,7 @@ else
     ok "soul.md found"
 fi
 
-# memory.md — create empty if missing
+# memory.md, create empty if missing
 if [ ! -f "$PROJECT_DIR/memory.md" ]; then
     echo "# Axium Memory" > "$PROJECT_DIR/memory.md"
     ok "Created empty memory.md"
@@ -140,7 +140,7 @@ else
     ok "memory.md found"
 fi
 
-# axium-skills/ — create directory if missing
+# axium-skills/, create directory if missing
 if [ ! -d "$PROJECT_DIR/axium-skills" ]; then
     mkdir -p "$PROJECT_DIR/axium-skills"
     ok "Created axium-skills/ directory"
@@ -152,15 +152,15 @@ fi
 if command -v jq &>/dev/null; then
     jq empty "$CONFIG" 2>/dev/null \
         && ok "config.json is valid JSON" \
-        || error "config.json is not valid JSON — fix it and re-run."
+        || error "config.json is not valid JSON, fix it and re-run."
 else
     # Lightweight check: file must start with '{' and end with '}'
     FIRST=$(head -c 1 "$CONFIG" | tr -d '[:space:]')
     LAST=$(tail -c 1 "$CONFIG" | tr -d '[:space:]')
     if [ "$FIRST" = "{" ] && [ "$LAST" = "}" ]; then
-        ok "config.json present (jq not installed — skipping deep validation)"
+        ok "config.json present (jq not installed, skipping deep validation)"
     else
-        error "config.json looks malformed (does not start/end with braces) — fix it and re-run."
+        error "config.json looks malformed (does not start/end with braces), fix it and re-run."
     fi
 fi
 
@@ -179,12 +179,12 @@ fi
 if curl -s --max-time 8 https://static.rust-lang.org -o /dev/null 2>/dev/null; then
     ok "Internet reachable"
 else
-    note "Cannot reach rust-lang.org — Rust download may fail if not installed."
+    note "Cannot reach rust-lang.org: Rust download may fail if not installed."
 fi
 
 # Port 3000 already in use by something other than us?
 if ss -tlnp 2>/dev/null | grep -q ':3000 '; then
-    note "Port 3000 already in use — will be freed when old service is replaced."
+    note "Port 3000 already in use, will be freed when old service is replaced."
 fi
 
 # ═══════════════════════════════════════════════════════════════
@@ -204,7 +204,7 @@ case "$DISTRO" in
         pacman -Syu --noconfirm base-devel pkgconf openssl curl git ca-certificates 2>&1 | tail -2
         ;;
     *)
-        warn "Unknown distro '$DISTRO' — skipping package install."
+        warn "Unknown distro '$DISTRO', skipping package install."
         warn "Ensure gcc, pkg-config, curl, git are present."
         ;;
 esac
@@ -221,7 +221,7 @@ step "4/11  Swap"
 # ═══════════════════════════════════════════════════════════════
 
 if [ "$TOTAL_RAM_MB" -ge 2048 ]; then
-    ok "RAM: ${TOTAL_RAM_MB} MB — swap not needed"
+    ok "RAM: ${TOTAL_RAM_MB} MB, swap not needed"
 else
     SWAPFILE="/swapfile"
     SWAP_MB=4096
@@ -233,7 +233,7 @@ else
             ok "Swap already active: ${EXISTING_MB} MB"
             NEED_SWAP=false
         else
-            info "Swap too small (${EXISTING_MB} MB) — recreating at ${SWAP_MB} MB..."
+            info "Swap too small (${EXISTING_MB} MB), recreating at ${SWAP_MB} MB..."
             swapoff "$SWAPFILE" 2>/dev/null || true
             rm -f "$SWAPFILE"
         fi
@@ -252,7 +252,7 @@ else
     ACTIVE_SWAP=$(free -m | awk '/Swap:/ {print $2}')
     [ "$ACTIVE_SWAP" -gt 0 ] \
         && ok "Swap: ${ACTIVE_SWAP} MB active" \
-        || error "Swap failed to activate — check filesystem supports swapfiles."
+        || error "Swap failed to activate: check filesystem supports swapfiles."
 fi
 
 # ═══════════════════════════════════════════════════════════════
@@ -289,7 +289,7 @@ fi
 # Verify working_directory exists; reset to home if not
 WD=$(grep -o '"working_directory" *: *"[^"]*"' "$CONFIG" | sed 's/.*: *"\([^"]*\)"/\1/' | head -1)
 if [ -n "$WD" ] && [ ! -d "$WD" ]; then
-    warn "working_directory '$WD' does not exist — resetting to $ACTUAL_HOME"
+    warn "working_directory '$WD' does not exist, resetting to $ACTUAL_HOME"
     sed -i "s|\"working_directory\": *\"[^\"]*\"|\"working_directory\": \"$ACTUAL_HOME\"|" "$CONFIG"
     WD="$ACTUAL_HOME"
 fi
@@ -303,14 +303,14 @@ if [ -f "$BINARY" ] && [ "$FORCE_REBUILD" != "--rebuild" ]; then
     ok "Binary exists: $BINARY  ($(du -sh "$BINARY" | cut -f1))"
     info "Use 'sudo bash setup.sh --rebuild' to force recompilation."
 else
-    [ "$FORCE_REBUILD" = "--rebuild" ] && { info "Force rebuild — removing old binary."; rm -f "$BINARY"; }
+    [ "$FORCE_REBUILD" = "--rebuild" ] && { info "Force rebuild, removing old binary."; rm -f "$BINARY"; }
 
     if [ "$TOTAL_RAM_MB" -ge 2048 ]; then
         JOBS=$(nproc)
         info "Building with $JOBS parallel jobs..."
     else
         JOBS=1
-        info "Building with 1 job (~20-40 min on Pi Zero 2 W — please wait)..."
+        info "Building with 1 job (~20-40 min on Pi Zero 2 W, please wait)..."
         info "Watch progress: journalctl -u $SERVICE_NAME -f  (another terminal)"
     fi
 
@@ -336,7 +336,7 @@ else
     # The binary is preserved; only intermediate artifacts are removed.
     DISK_FREE_MB=$(df -m "$PROJECT_DIR" | awk 'NR==2 {print $4}')
     if [ "$TOTAL_RAM_MB" -lt 2048 ] || [ "$DISK_FREE_MB" -lt 2048 ]; then
-        info "Low storage detected — cleaning build cache to reclaim space..."
+        info "Low storage detected, cleaning build cache to reclaim space..."
         CACHE_SIZE=$(du -sh "$PROJECT_DIR/target" 2>/dev/null | cut -f1)
         cp "$BINARY" "/tmp/axiom_preserve"
         su - "$ACTUAL_USER" -c "cd '$PROJECT_DIR' && source \$HOME/.cargo/env && cargo clean" 2>/dev/null || true
@@ -358,13 +358,13 @@ if command -v file &>/dev/null; then
             if echo "$BIN_INFO" | grep -qiE "ARM|aarch64"; then
                 ok "Binary architecture: ARM ✓"
             else
-                bad "Binary is x86-64 but this machine is $ARCH — deleting and recompiling..."
+                bad "Binary is x86-64 but this machine is $ARCH, deleting and recompiling..."
                 rm -f "$BINARY"
                 if [ "$TOTAL_RAM_MB" -ge 2048 ]; then
                     JOBS=$(nproc)
                 else
                     JOBS=1
-                    info "Building with 1 job (~20-40 min on Pi Zero 2 W — please wait)..."
+                    info "Building with 1 job (~20-40 min on Pi Zero 2 W, please wait)..."
                 fi
                 BUILD_START=$(date +%s)
                 BUILD_OK=true
@@ -382,7 +382,7 @@ if command -v file &>/dev/null; then
         x86_64)
             echo "$BIN_INFO" | grep -qiE "x86-64|ELF 64.*x86" \
                 && ok "Binary architecture: x86-64 ✓" \
-                || note "Could not confirm binary arch — proceeding anyway."
+                || note "Could not confirm binary arch, proceeding anyway."
             ;;
     esac
 fi
@@ -404,13 +404,13 @@ if command -v getenforce &>/dev/null && [ "$(getenforce 2>/dev/null)" = "Enforci
         # Allow the service to read/write the project directory (config.json, memory.md, etc.)
         chcon -R -t user_home_t "$PROJECT_DIR" 2>/dev/null \
             || chcon -R -t var_t "$PROJECT_DIR" 2>/dev/null \
-            || note "SELinux: could not set context on project dir — config saves may fail"
+            || note "SELinux: could not set context on project dir, config saves may fail"
         ok "SELinux: set write context on $PROJECT_DIR"
     else
-        note "SELinux is enforcing but chcon not found — service may fail with Permission denied."
+        note "SELinux is enforcing but chcon not found, service may fail with Permission denied."
     fi
 else
-    ok "SELinux not enforcing — no context change needed"
+    ok "SELinux not enforcing, no context change needed"
 fi
 
 # ═══════════════════════════════════════════════════════════════
@@ -425,7 +425,7 @@ if command -v ufw &>/dev/null; then
         ufw allow 3000/tcp comment "Axium web UI" > /dev/null 2>&1
         ok "ufw: port 3000 allowed"
     else
-        ok "ufw present but inactive — no rule needed"
+        ok "ufw present but inactive, no rule needed"
     fi
 fi
 
@@ -436,11 +436,11 @@ if command -v firewall-cmd &>/dev/null; then
         firewall-cmd --reload > /dev/null 2>&1
         ok "firewalld: port 3000 opened permanently"
     else
-        ok "firewalld present but inactive — no rule needed"
+        ok "firewalld present but inactive, no rule needed"
     fi
 fi
 
-[ "$FW_FOUND" = false ] && ok "No firewall detected — port 3000 open by default"
+[ "$FW_FOUND" = false ] && ok "No firewall detected, port 3000 open by default"
 
 # ═══════════════════════════════════════════════════════════════
 step "10/11 Systemd service"
@@ -506,7 +506,7 @@ if [ "$STARTED" = false ]; then
   Common causes:
     - Binary is wrong architecture (delete it, run sudo bash setup.sh)
     - config.json has invalid JSON
-    - API keys are missing (service exits immediately — add them to config.json first)"
+    - API keys are missing (service exits immediately: add them to config.json first)"
 fi
 
 # ═══════════════════════════════════════════════════════════════
@@ -518,13 +518,13 @@ sleep 2  # let the server bind
 # Check bind address
 BIND=$(ss -tlnp 2>/dev/null | grep ':3000' || echo "")
 if [ -z "$BIND" ]; then
-    bad "Port 3000 is not bound — service crashed after start."
+    bad "Port 3000 is not bound, service crashed after start."
     journalctl -u "$SERVICE_NAME" -n 15 --no-pager 2>/dev/null | sed 's/^/  /'
     error "Service is not listening. Common cause: missing/invalid API keys in config.json."
 elif echo "$BIND" | grep -q '0.0.0.0:3000'; then
-    ok "Listening on 0.0.0.0:3000 — LAN accessible ✓"
+    ok "Listening on 0.0.0.0:3000, LAN accessible ✓"
 elif echo "$BIND" | grep -q '127.0.0.1:3000'; then
-    bad "Listening on 127.0.0.1 only — LAN access will NOT work from your PC."
+    bad "Listening on 127.0.0.1 only, LAN access will NOT work from your PC."
     note "This means an old binary is running (before the 0.0.0.0 bind change)."
     note "Force a rebuild:  sudo bash setup.sh --rebuild"
 fi
@@ -535,9 +535,9 @@ if command -v curl &>/dev/null; then
     if [ "$HTTP_CODE" = "200" ]; then
         ok "Web UI responding (HTTP 200) ✓"
     elif [ "$HTTP_CODE" = "000" ]; then
-        note "Web UI not responding yet — may still be starting."
+        note "Web UI not responding yet, may still be starting."
     else
-        note "Web UI returned HTTP $HTTP_CODE — check logs if issues arise."
+        note "Web UI returned HTTP $HTTP_CODE: check logs if issues arise."
     fi
 fi
 
@@ -555,7 +555,7 @@ echo -e "  ${BOLD}│                                                    │${NC
 echo -e "  ${BOLD}│  Browser (direct LAN):                             │${NC}"
 printf "  ${BOLD}│    %-48s│${NC}\n" "http://${LAN_IP}:3000"
 echo -e "  ${BOLD}│                                                    │${NC}"
-echo -e "  ${BOLD}│  Browser (SSH tunnel — more secure):               │${NC}"
+echo -e "  ${BOLD}│  Browser (SSH tunnel, more secure):               │${NC}"
 printf "  ${BOLD}│    %-48s│${NC}\n" "ssh -L 3000:localhost:3000 ${ACTUAL_USER}@${LAN_IP}"
 echo -e "  ${BOLD}│    then open http://localhost:3000                 │${NC}"
 echo -e "  ${BOLD}│                                                    │${NC}"
@@ -566,6 +566,6 @@ echo -e "  ${BOLD}└───────────────────�
 echo ""
 
 if [ "$HAS_KEYS" = false ]; then
-    echo -e "  ${YELLOW}⚠  No API keys found — open the URL above → Settings → add your key.${NC}"
+    echo -e "  ${YELLOW}⚠  No API keys found: open the URL above → Settings → add your key.${NC}"
     echo ""
 fi

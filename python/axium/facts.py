@@ -1,4 +1,4 @@
-r"""Typed, importance-scored facts — the half of memory the model does not have
+r"""Typed, importance-scored facts, the half of memory the model does not have
 to remember to write.
 
 `memory.Memory` is a markdown file the agent edits deliberately via
@@ -14,14 +14,14 @@ statements into typed rows:
     key         stable id for dedup ("shipping.free_threshold"); derived from the
                 value when omitted, so restating the same fact updates in place
     value       the statement itself
-    importance  0..1 — drives ordering and what survives the render budget
+    importance  0..1, drives ordering and what survives the render budget
 
 The rows render into a `[FACTS]` block that sits in the SYSTEM prompt, above the
 conversation. Compaction rewrites history; it cannot touch the system prompt, so
 a fact captured in turn 1 is still verbatim in front of the model in turn 20.
 
 A user correction ("no, not like that", "oxi, lathos") is extracted as a directive
-at high importance — the thing an agent is most expensive to forget.
+at high importance: the thing an agent is most expensive to forget.
 
 Storage is SQLite next to the memory file. Readers never create tables: the
 per-turn prompt build must be side-effect-free.
@@ -238,7 +238,7 @@ def looks_like_correction(text):
 
 def parse_extraction(raw):
     """Parse the extractor's output into fact dicts. Tolerant: a malformed line is
-    skipped, never fatal — a bad extraction must not cost the turn."""
+    skipped, never fatal: a bad extraction must not cost the turn."""
     out = []
     for line in (raw or "").splitlines():
         line = line.strip().lstrip("-*• ").strip()

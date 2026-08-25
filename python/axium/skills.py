@@ -1,4 +1,4 @@
-r"""Skills — named, reusable workflows stored as Markdown.
+r"""Skills, named, reusable workflows stored as Markdown.
 
 A skill is a folder under a skills root holding one or more `.md` files:
 
@@ -7,7 +7,7 @@ A skill is a folder under a skills root holding one or more `.md` files:
       deploy-and-verify/SKILL.md
 
 The folder name is the skill's name; the Markdown is instruction the agent
-follows by calling its own tools. Nothing here adds a tool or a code path — a
+follows by calling its own tools. Nothing here adds a tool or a code path, a
 skill composes what already exists, which is why a non-developer can add one by
 dropping in a file.
 

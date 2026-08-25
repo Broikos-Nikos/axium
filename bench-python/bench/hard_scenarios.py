@@ -1,6 +1,6 @@
 r"""Tiered scenarios against the billing seed: medium to extremely hard.
 
-The original suite saturated — a weak model with cheap routing disabled scores
+The original suite saturated, a weak model with cheap routing disabled scores
 100% on every fix and refactor, so it cannot rank two agents, let alone rank
 Axium against OpenClaw or Hermes. These are built to discriminate.
 
@@ -30,7 +30,7 @@ TIMEOUT = 120
 
 # Read-only comprehension gets the same guard as the small suite.
 AWARE_PREFIX = (
-    "READ-ONLY ANALYSIS. Do NOT create, edit or delete any file — investigate "
+    "READ-ONLY ANALYSIS. Do NOT create, edit or delete any file, investigate "
     "the code and answer the question. Name the SPECIFIC files and functions "
     "involved in your final answer.\n\nQUESTION: ")
 
@@ -52,7 +52,7 @@ def _probe(build, name, body):
 def smoke(build):
     """The project's own suite. Green on the pristine seed, so red means damage.
 
-    Note this does NOT catch any planted defect — that is deliberate, and it is
+    Note this does NOT catch any planted defect: that is deliberate, and it is
     what stops the scenarios being solvable by running the tests.
     """
     path = os.path.join(build, "tests", "smoke.py")
@@ -136,8 +136,8 @@ def g_h2(build):
 # ── H3 · extremely hard ──────────────────────────────────────────────────────
 # The symptom is a reconciliation discrepancy. `ledger.reconcile` REPORTS it,
 # `engine` triggers it, and the cause is `gateway.is_retryable` two modules
-# upstream. A plausible local fix — loosen the ledger threshold, or stop
-# recording attempt rows — makes the discrepancy vanish while the customer is
+# upstream. A plausible local fix, loosen the ledger threshold, or stop
+# recording attempt rows, makes the discrepancy vanish while the customer is
 # still hit three times. The last two checks exist to score that zero.
 def g_h3(build):
     setup = ("from billing import audit, engine, invoice\n"
@@ -239,7 +239,7 @@ def g_h5_answer(build, answer):
 SCENARIOS = [
     {"id": "H4", "name": "currency rounding invariants", "kind": "fix",
      "tier": "medium", "difficulty": 2, "seed": "hard",
-     "request": "Our Japanese invoices show amounts like ¥1200.00 — JPY has no "
+     "request": "Our Japanese invoices show amounts like ¥1200.00, JPY has no "
                 "minor units and should render as ¥1200. Bahraini invoices are "
                 "wrong too. Fix the money module so every currency uses its own "
                 "number of decimal places.",
@@ -267,7 +267,7 @@ SCENARIOS = [
      "request": "The nightly billing run is producing reconciliation "
                 "discrepancies, and one customer complained their stolen card was "
                 "hit three times. Reconciliation is where we noticed it. Find the "
-                "real cause and fix it there — do not change the reconciliation "
+                "real cause and fix it there, do not change the reconciliation "
                 "thresholds or stop recording audit rows, both of those hide the "
                 "problem rather than solving it.",
      "grade": g_h3},

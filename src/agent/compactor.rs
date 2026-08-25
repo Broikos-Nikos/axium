@@ -7,18 +7,18 @@ use super::{resolve_provider, ApiKeySet, Message, Provider};
 const COMPACTOR_SYSTEM: &str = "\
 You are summarizing conversations from an autonomous Linux assistant that uses tools \
 (run_command, read_file, write_file, patch_file, search_files, git_command, etc.) to \
-complete coding and system tasks. Your summary replaces the old messages — the assistant \
+complete coding and system tasks. Your summary replaces the old messages, the assistant \
 will only see your summary plus the most recent messages.\n\n\
 Preserve:\n\
 - File paths created/edited/read and what was done to them\n\
 - Commands run and their outcomes (especially errors)\n\
 - Decisions made and user preferences stated\n\
 - Task status: what is done, what is still pending\n\
-- <tool_trace> blocks verbatim — they are already compressed\n\n\
+- <tool_trace> blocks verbatim: they are already compressed\n\n\
 Omit:\n\
 - Pleasantries, acknowledgements, verbose explanations\n\
 - Plans that were already executed (keep the result, drop the plan)\n\
-- Redundant file contents — note the file and purpose, not the code";
+- Redundant file contents : note the file and purpose, not the code";
 
 pub struct Compactor {
     keys: ApiKeySet,
@@ -61,7 +61,7 @@ impl Compactor {
              - Keep: file paths edited, commands run, errors encountered, decisions made, \
                user preferences stated, task status (done/pending/failed).\n\
              - Omit: pleasantries, explanations already acted on, superseded plans.\n\
-             - If code was written, note the file and what it does — not the code itself.\n\
+             - If code was written, note the file and what it does, not the code itself.\n\
              - Be terse. Every word must earn its place.\n\n\
              Conversation to summarize:\n{}",
             history_text

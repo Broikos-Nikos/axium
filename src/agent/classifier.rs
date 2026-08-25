@@ -28,7 +28,7 @@ fn truncate_head(s: &str, max: usize) -> String {
     }
 }
 
-/// Last `max` chars — the tail of an agent reply is the part that says what
+/// Last `max` chars, the tail of an agent reply is the part that says what
 /// happened, so a long reply is trimmed from the front.
 fn truncate_tail(s: &str, max: usize) -> String {
     let n = s.chars().count();
@@ -42,14 +42,14 @@ fn truncate_tail(s: &str, max: usize) -> String {
 /// Classification result from the cheap model.
 #[derive(Debug, Clone)]
 pub enum PromptClass {
-    /// Trivial question — answer directly with the classifier model, skip primary.
+    /// Trivial question, answer directly with the classifier model, skip primary.
     Trivial(String),
-    /// Simple question — pass through to primary unchanged.
+    /// Simple question, pass through to primary unchanged.
     Simple,
-    /// Medium task — uses primary model but skips quality review and code review.
+    /// Medium task, uses primary model but skips quality review and code review.
     /// Tests still run if detected. Covers clear code tasks that don't need enhancement.
     Medium,
-    /// Complex task — enhanced prompt replaces the original for the primary model.
+    /// Complex task, enhanced prompt replaces the original for the primary model.
     Complex(String),
 }
 
@@ -66,7 +66,7 @@ pub struct Classifier {
     provider: Provider,
     http: Arc<reqwest::Client>,
     /// Where this classifier's calls are billed. `None` outside a metered
-    /// turn — every cheap pass in this file bills through it, which is what
+    /// turn, every cheap pass in this file bills through it, which is what
     /// makes the per-role cost split able to prove cheap routing pays off.
     meter: Option<crate::agent::metrics::MeterHandle>,
 }
@@ -129,7 +129,7 @@ Examples of SIMPLE tasks: "install nginx", "create a file called test.txt", "res
 
 COMPLEX: <enhanced prompt>
 Use this ONLY when the user's goal is ambiguous, requires expert judgment between multiple options, or involves design/architecture decisions where added context and constraints would significantly improve the outcome.
-Do NOT use for specific, unambiguous commands — only use when the task genuinely benefits from clarifying requirements and quality criteria.
+Do NOT use for specific, unambiguous commands, only use when the task genuinely benefits from clarifying requirements and quality criteria.
 Write an expert-level task description that clarifies the goal, specifies quality criteria, and defines what a good result looks like.
 Do NOT use "You are a..." or any role-assignment language. Write it as a direct task description.
 
@@ -185,7 +185,7 @@ Respond with ONLY the classification line. No explanations."#;
         } else if response == "SIMPLE" {
             Ok(PromptClass::Simple)
         } else {
-            warn!(response = %response, "Classifier returned unexpected value — falling back to Simple");
+            warn!(response = %response, "Classifier returned unexpected value, falling back to Simple");
             Ok(PromptClass::Simple)
         }
     }
@@ -306,7 +306,7 @@ Respond with ONLY the classification line. No explanations."#;
         let system = r#"You are a task-completion auditor. Given a user request, the tools the agent executed, and the agent's final text, decide if the task is DONE.
 
 Rules:
-- If the user's message is conversational — a greeting, check-in, acknowledgment, or social message (e.g. "hi", "ok", "thanks", "just checking", "hello", "good morning") — and the agent replied appropriately → COMPLETE
+- If the user's message is conversational (a greeting, check-in, acknowledgment, or social message (e.g. "hi", "ok", "thanks", "just checking", "hello", "good morning")) and the agent replied appropriately → COMPLETE
 - If the user asked a question and the agent answered it → COMPLETE
 - If the user asked for something to be created/written/built AND the tool log shows it was done → COMPLETE
 - If the agent delivered a file/email the user asked for → COMPLETE
@@ -329,7 +329,7 @@ Respond with EXACTLY one word: COMPLETE or INCOMPLETE"#;
                 } else if word.contains("INCOMPLETE") {
                     false
                 } else {
-                    warn!(response = %word, "Heartbeat returned unexpected value — treating as complete");
+                    warn!(response = %word, "Heartbeat returned unexpected value, treating as complete");
                     true
                 }
             }
@@ -480,7 +480,7 @@ SKILLS: skill1, skill2"#;
     /// This is the pass that makes a rule stated in turn 1 survive to turn 20:
     /// nothing here depends on the model having remembered to call a tool. Pass
     /// `correction = true` when the user turn looks like a correction, which
-    /// floors the importance of whatever comes back — the thing an agent is most
+    /// floors the importance of whatever comes back: the thing an agent is most
     /// expensive to forget.
     pub async fn extract_facts(
         &self,
@@ -515,7 +515,7 @@ SKILLS: skill1, skill2"#;
     /// A short, brain-grounded plan for a complex task.
     ///
     /// Returns "" when the model declined or produced something that would steer
-    /// nothing — an unusable plan still costs tokens on every call of the loop.
+    /// nothing: an unusable plan still costs tokens on every call of the loop.
     pub async fn plan(&self, task: &str, brain_context: &str, facts_block: &str) -> String {
         let prompt = planner::build_prompt(task, brain_context, facts_block);
         match self
@@ -656,8 +656,8 @@ PRESERVE exactly:
 - All decisions the user confirmed or made
 - All context needed to continue the conversation (what was built, installed, configured)
 - The chronological order of distinct topics
-- Messages that are already clean (no correction pattern) — return them unchanged
-- <tool_trace> blocks in assistant messages — these are compressed tool logs, keep them verbatim
+- Messages that are already clean (no correction pattern), return them unchanged
+- <tool_trace> blocks in assistant messages: these are compressed tool logs, keep them verbatim
 
 NEVER:
 - Remove messages containing unique information not repeated elsewhere
@@ -800,12 +800,12 @@ FAILED: <1-2 sentence reason why the task is not complete>"#;
                     let reason = trimmed.strip_prefix("FAILED:").unwrap_or("").trim().to_string();
                     (false, reason)
                 } else {
-                    warn!(response = %trimmed, "Task verification returned unexpected value — treating as verified");
+                    warn!(response = %trimmed, "Task verification returned unexpected value, treating as verified");
                     (true, String::new())
                 }
             }
             Err(e) => {
-                warn!(error = %e, "Task verification LLM call failed — treating as verified");
+                warn!(error = %e, "Task verification LLM call failed, treating as verified");
                 (true, String::new())
             }
         }
@@ -843,7 +843,7 @@ impl CodeReviewer {
         let diff_cap = if diff.len() > 8000 {
             let mut b = 8000; while b > 0 && !diff.is_char_boundary(b) { b -= 1; } &diff[..b]
         } else { diff };
-        let system = "You are a senior software engineer doing a focused code review. Analyze the git diff and give specific, actionable feedback on: 1) bugs or logic errors, 2) edge cases not handled, 3) security issues, 4) anything incomplete. Be concise — bullet points only. If the code looks correct, respond with exactly: LGTM";
+        let system = "You are a senior software engineer doing a focused code review. Analyze the git diff and give specific, actionable feedback on: 1) bugs or logic errors, 2) edge cases not handled, 3) security issues, 4) anything incomplete. Be concise, bullet points only. If the code looks correct, respond with exactly: LGTM";
         let prompt = format!("Task: {}\n\nDiff:\n```\n{}\n```", user_request, diff_cap);
         match self.call_llm(system, &prompt, 1024).await {
             Ok(resp) => {
@@ -999,7 +999,7 @@ fn score_prompt(msg: &str) -> ScoreResult {
                      else if words.len() > 100 { 0.8 }
                      else { (words.len() as f64 - 30.0) / 100.0 };
 
-    // 6. Simple indicators (weight -0.08, negative — pulls score down)
+    // 6. Simple indicators (weight -0.08, negative, pulls score down)
     const SIMPLE_IND: &[&str] = &[
         "what is", "define", "translate", "hello", "thanks", "hi ",
         "who is", "how are", "good morning", "what time",
@@ -1061,7 +1061,7 @@ fn quick_classify_trivial(msg: &str) -> Option<PromptClass> {
     let lower = trimmed.to_lowercase();
     let lower = lower.trim_end_matches(['!', '.', '?', ' ']).trim();
 
-    // Short greetings and acknowledgements — no LLM needed, let main model reply
+    // Short greetings and acknowledgements, no LLM needed, let main model reply
     const GREETINGS: &[&str] = &[
         "hi", "hello", "hey", "thanks", "thank you", "thank you so much",
         "ok", "okay", "sure", "alright", "got it", "noted", "understood",
@@ -1073,7 +1073,7 @@ fn quick_classify_trivial(msg: &str) -> Option<PromptClass> {
         return Some(PromptClass::Simple);
     }
 
-    // Identity / capability questions — always Simple (main model answers these)
+    // Identity / capability questions, always Simple (main model answers these)
     const IDENTITY_STARTS: &[&str] = &[
         "who are you", "what are you", "what can you do",
         "do you have", "can you remember", "what do you know",
@@ -1083,7 +1083,7 @@ fn quick_classify_trivial(msg: &str) -> Option<PromptClass> {
         return Some(PromptClass::Simple);
     }
 
-    // Explicit remember/save instructions — only the primary model has memory tools
+    // Explicit remember/save instructions, only the primary model has memory tools
     if lower.starts_with("remember ") || lower.starts_with("save to memory")
         || lower.starts_with("store ") || lower.starts_with("forget ")
     {
@@ -1112,11 +1112,11 @@ fn quick_classify(msg: &str) -> Option<PromptClass> {
         return match result.score {
             s if s < -0.02 => Some(PromptClass::Simple),
             s if s < 0.25 => Some(PromptClass::Medium),
-            _ => None,  // Complex territory — let LLM enhance the prompt
+            _ => None,  // Complex territory, let LLM enhance the prompt
         };
     }
 
-    // Stage 3: low confidence — fall through to LLM classifier
+    // Stage 3: low confidence, fall through to LLM classifier
     info!(
         score = format!("{:.3}", result.score),
         confidence = format!("{:.3}", result.confidence),

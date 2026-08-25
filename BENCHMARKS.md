@@ -1,8 +1,8 @@
-# Benchmarks — handover guide
+# Benchmarks, handover guide
 
 Each implementation of Axium is measured by its own project. Both run the **same
 scenarios** through the **same graders** and write the **same JSONL rows**, so a
-Rust number and a Python number are directly comparable — that is the whole
+Rust number and a Python number are directly comparable: that is the whole
 design, and everything below exists to protect it.
 
 | project | measures | how |
@@ -15,7 +15,7 @@ Inside `bench-python` there are two suites answering different questions:
 | suite | answers |
 |---|---|
 | `bench` | which model, and which routing knobs, are best for Axium? |
-| `versus` | Axium or Orange — which agent **design** wins? |
+| `versus` | Axium or Orange, which agent **design** wins? |
 
 All paid suites call a real API. Read [Cost](#cost-and-safety) before a full run.
 
@@ -27,7 +27,7 @@ All paid suites call a real API. Read [Cost](#cost-and-safety) before a full run
 scenarios.json          generated from the Python definitions; ids, prompts, turn text
 bench-python/bench/     fixtures (the seed project) and graders (the definition of correct)
 bench-python/bridge.py  the process boundary bench-rust talks to
-src/agent/metrics.rs    pricing, mirroring python/axium/pricing.py — parity-tested
+src/agent/metrics.rs    pricing, mirroring python/axium/pricing.py, parity-tested
 ```
 
 Nothing is implemented twice. The graders are Python that imports and executes
@@ -83,7 +83,7 @@ build directory**, so no scenario can reach your real memory, facts or history.
 
 ---
 
-## 1. `bench` — 23 scenarios
+## 1. `bench`, 23 scenarios
 
 Each runs against a freshly generated copy of a seed project with planted
 defects.
@@ -112,7 +112,7 @@ python -m bench.runner --kind fix --mode simple
 python -m bench.runner --compare deepseek-v4-pro,deepseek-v4-flash
 python -m bench.runner --continuation ""              # disable cheap routing
 
-# rust — same flags
+# rust, same flags
 cd bench-rust
 .\target\release\bench-rust --sanity
 .\target\release\bench-rust --only B1,B4,R1 --reps 3
@@ -160,7 +160,7 @@ python -m bench.report --scenarios --tools
 ```
 
 Every row carries `impl` (`"python"` / `"rust"`) and, for Rust rows,
-`config.binary` and `config.binary_mtime` — a benchmark that cannot answer
+`config.binary` and `config.binary_mtime`: a benchmark that cannot answer
 "which binary?" cannot answer "did the change help?".
 
 ### Why `--sanity` is not optional
@@ -168,13 +168,13 @@ Every row carries `impl` (`"python"` / `"rust"`) and, for Rust rows,
 It asserts the acceptance suite passes on an untouched seed and that every fix
 grader *fails* before an agent touches anything. Without both, a green score
 could just mean the grader is broken. Both runners refuse to start a paid run
-until it is clean. **Do not reach for a flag to get past a failure** — sanity
+until it is clean. **Do not reach for a flag to get past a failure**, sanity
 failing means the graders are measuring nothing, so any score from that run is
 meaningless. Fix the grader or the seed.
 
 ---
 
-## 2. `versus` — Axium against Orange
+## 2. `versus`, Axium against Orange
 
 Both agents driven through the same five multi-turn sessions, on byte-identical
 copies of the same seed, graded by code neither can see.
@@ -237,7 +237,7 @@ directory (`axium-bench-builds`, `axium-versus-builds`). No suite touches a real
 project. `--keep` leaves build directories behind for inspection.
 
 V4 and M2 deliberately ask an agent to delete things. Safe because the target is
-a generated copy — but do not "helpfully" repoint a runner at a real project.
+a generated copy, but do not "helpfully" repoint a runner at a real project.
 
 ---
 
@@ -251,7 +251,7 @@ a generated copy — but do not "helpfully" repoint a runner at a real project.
   Grade from the project state via `versus/graders.py`, never from what the
   agent says it did.
 - **A model's pricing:** `python/axium/pricing.py` **and** `src/agent/metrics.rs`
-  — they are parity-tested against each other, so a table edited on one side
+: they are parity-tested against each other, so a table edited on one side
   fails the other's test until both agree. An unpriced model still runs but
   reports `$0.0000`, which silently corrupts every cost comparison; both meters
   list such models under `unpriced_models`, so check that field.
@@ -260,16 +260,16 @@ a generated copy — but do not "helpfully" repoint a runner at a real project.
 
 ## Troubleshooting
 
-**`bench-python cannot find the axium package`** — set `AXIUM_PYTHON` to the
+**`bench-python cannot find the axium package`**: set `AXIUM_PYTHON` to the
 directory containing it, as the error prints.
 
-**`cannot read scenarios.json`** — `cd bench-python && python export_scenarios.py`.
+**`cannot read scenarios.json`**, `cd bench-python && python export_scenarios.py`.
 
-**`axium binary not found`** — `cargo build --release` from the repo root.
+**`axium binary not found`**, `cargo build --release` from the repo root.
 
-**`ModuleNotFoundError: No module named 'versus'`** — run from `bench-python/`.
+**`ModuleNotFoundError: No module named 'versus'`**: run from `bench-python/`.
 
-**`ModuleNotFoundError: No module named 'PySide6'`** during an Orange run —
+**`ModuleNotFoundError: No module named 'PySide6'`** during an Orange run,
 harmless. Orange's evals import it transitively; headless it logs a traceback for
 its settings watcher and carries on.
 
@@ -281,7 +281,7 @@ real architectural difference, and V5 exists to price it.
 emits a row per *failure* plus one "suite exits clean" row.
 
 **Numbers look worse than last week.** Check the log tag before concluding
-anything — logs split by configuration, and comparing a `noroute`, `simple` or
+anything, logs split by configuration, and comparing a `noroute`, `simple` or
 `nofacts` file against a default one is comparing two different agents.
 
 **A Rust row scored badly right after a code change.** Check

@@ -1,4 +1,4 @@
-//! Turn-level checkpoints — revert a whole turn's file changes in one call.
+//! Turn-level checkpoints, revert a whole turn's file changes in one call.
 //!
 //! The blast-radius benchmark asks an agent to delete things, then to put them
 //! back "exactly". Axium scored the recovery but spent 47 tool calls doing it: it
@@ -269,7 +269,7 @@ impl Checkpoints {
     /// This is the turn's "what did it change" set, derived from the snapshots
     /// rather than tracked separately. Effect-based and slightly broad: a
     /// mutating tool that errored still recorded a pre-state, so the path appears
-    /// here. For the journal that is the right bias — "the turn touched this
+    /// here. For the journal that is the right bias, "the turn touched this
     /// file" is what a reader wants next week.
     pub fn last_files(&self) -> Vec<String> {
         self.stack

@@ -1,4 +1,4 @@
-"""Router wiring — the new durable-context layer, with no API calls.
+"""Router wiring, the new durable-context layer, with no API calls.
 
 `providers.call` is replaced by a scripted fake, so these tests assert what the
 agent DOES with facts, brain, checkpoints, skills and the planner rather than
@@ -453,7 +453,7 @@ class TestRuntimeVerification(unittest.TestCase):
         ctx = t.new_context(self.tmp)
         self.assertIn("No syntax problems",
                       t.execute("get_diagnostics", {"path": "pkg/mod.py"}, ctx),
-                      "the syntax check should see nothing wrong — that is the gap")
+                      "the syntax check should see nothing wrong: that is the gap")
         res = verify.verify(self.tmp, ["pkg/mod.py"])
         self.assertFalse(res.ok)
         self.assertEqual(res.kind, "import")

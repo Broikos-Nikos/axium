@@ -3,7 +3,7 @@ r"""Budget-capped scoring: solving is not enough, solving *within budget* is.
 Correctness saturates. Both DeepSeek models solve every scenario in the tiered
 suite, including the one labelled "extremely hard", so a correctness score
 cannot rank three harnesses driving the same model. What does not saturate is
-what each harness SPENDS to get there — and unlike correctness, that is a
+what each harness SPENDS to get there, and unlike correctness, that is a
 property of the harness rather than of the model.
 
 So every scenario carries a budget, and a run that exceeds it is scored as a
@@ -23,7 +23,7 @@ interruption. Both are reported; do not describe the second as "stopped".
 **Budgets are absolute and declared with the scenario, never derived from any
 harness's own usage.**
 
-The tempting version — "cap it at 10x what Axium spent" — is rigged by
+The tempting version, "cap it at 10x what Axium spent", is rigged by
 construction: Axium cannot exceed a multiple of itself, so it scores 100% by
 definition and every number built on it is worthless the moment anyone checks.
 A budget has to come from the task: what a competent solve costs, plus headroom.
@@ -40,7 +40,7 @@ real signal and not variance.
 class Budget:
     """What one scenario is allowed to spend.
 
-    Any limit left as `None` is not enforced — a budget should constrain what
+    Any limit left as `None` is not enforced: a budget should constrain what
     the scenario is actually about, and inventing a wall-clock cap for a task
     that is not about latency just adds noise.
     """
@@ -61,7 +61,7 @@ class Budget:
         return f"Budget({', '.join(parts)})"
 
     def justify(self):
-        return self.why or "(no justification recorded — set one)"
+        return self.why or "(no justification recorded: set one)"
 
     def check(self, metrics):
         """Which limits this run broke. Empty list means within budget.
@@ -104,7 +104,7 @@ def score(change_rows, metrics, budget):
 
     Returns (solved, within_budget, rows). `rows` is the grader's own list with
     a budget row appended, so a report that knows nothing about budgets still
-    renders something truthful — and a run that solved the task but blew the
+    renders something truthful, and a run that solved the task but blew the
     budget shows exactly which limit it broke rather than a bare zero.
     """
     solved = bool(change_rows) and all(ok for _, ok in change_rows)
@@ -167,7 +167,7 @@ def headline(rows):
 # the unfounded number this module exists to prevent.
 #
 # Once measured they become absolute ceilings applied identically to every
-# harness — NOT a multiple of Axium's usage. Axium can and should fail one if it
+# harness, NOT a multiple of Axium's usage. Axium can and should fail one if it
 # regresses; a bar its subject cannot fail is not a bar.
 BUDGETS = {
     # MEASURED 2026-08-25, Axium on deepseek-v4-pro against the 2,834-line seed.

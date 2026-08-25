@@ -5,7 +5,7 @@ The rule
 
 A harness is CLASSIFIED on a scenario if it solved the task within
 `DNF_MULTIPLE` times the token usage of the **fastest harness that solved it**.
-Anything slower is `dnf` — did not finish.
+Anything slower is `dnf`, did not finish.
 
 This is the motorsport convention. Formula One classifies a finisher only if it
 completed 90% of the winner's distance; qualifying uses the 107% rule. Nobody
@@ -18,7 +18,7 @@ Why it is defined against the best performer and not against Axium
 The tempting version is "5x whatever Axium used". Do not do that. It is not a
 rule, it is a result: Axium cannot exceed a multiple of itself, so it is
 classified by definition on every scenario, and the moment anyone reads the
-method the whole benchmark is void — along with any claim built on it.
+method the whole benchmark is void, along with any claim built on it.
 
 Defined against the best performer, the bar is symmetric. In practice Axium is
 usually fastest and therefore usually sets it, which produces the same headline;
@@ -107,7 +107,7 @@ def classify(results, multiple=DNF_MULTIPLE):
     """Classify one scenario's results in place. Returns (results, best_tokens).
 
     `best_tokens` is the fastest SOLVED run. If nobody solved it there is no
-    reference, every result is a plain failure, and no ratio is claimed — an
+    reference, every result is a plain failure, and no ratio is claimed, an
     unsolved scenario says nothing about relative efficiency.
     """
     # A run that broke the project's own test suite has not solved anything,

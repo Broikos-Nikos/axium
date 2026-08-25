@@ -1,4 +1,4 @@
-r"""Runtime verification — the feedback loop a syntax check misses.
+r"""Runtime verification, the feedback loop a syntax check misses.
 
 `get_diagnostics` parses. Parsing proves a file is well-formed, not that it
 works: a module can `ast.parse` cleanly and still raise on import because a name
@@ -15,7 +15,7 @@ than reporting success:
 
 Discovery is by convention, not configuration: pytest, `tests/`, a Makefile
 target, `npm test`. A project with none of those gets the import check alone,
-which is still more than nothing. An unrunnable project SKIPS rather than fails —
+which is still more than nothing. An unrunnable project SKIPS rather than fails,
 "we could not verify" and "it is broken" are different claims, and reporting the
 second when you mean the first trains an agent to ignore you.
 
@@ -125,7 +125,7 @@ def check_tests(workdir):
     rc, out = _run(cmd, workdir)
     if rc is None:
         return Result(skipped=True, kind="tests", detail=out)
-    # pytest exit 5 is "no tests collected" — nothing ran, so nothing is proven,
+    # pytest exit 5 is "no tests collected", nothing ran, so nothing is proven,
     # and calling that a pass would be a lie in the direction that costs most.
     if rc == 5:
         return Result(skipped=True, kind="tests", detail="no tests collected")
@@ -148,7 +148,7 @@ def verify(workdir, changed):
         if not check.ok and not check.skipped:
             return check
     # If EVERY check skipped, nothing was verified. Saying "ok" here would record
-    # a verification that never happened — confidence for free, which is the
+    # a verification that never happened, confidence for free, which is the
     # thing this module exists to stop.
     if all(c.skipped for c in checks):
         return Result(skipped=True,

@@ -1,6 +1,6 @@
 """Tool implementations.
 
-Every tool returns a plain string — that string is what the model sees as the
+Every tool returns a plain string: that string is what the model sees as the
 tool result, so errors are returned as text (never raised) and the agent gets a
 chance to recover.
 
@@ -33,7 +33,7 @@ class ToolError(Exception):
 # ── shell selection ──────────────────────────────────────────────────────────
 def _shell():
     """Prefer bash (the tool descriptions promise POSIX syntax). On Windows fall
-    back to Git Bash if present, then cmd — a scenario that needs bash and gets
+    back to Git Bash if present, then cmd: a scenario that needs bash and gets
     cmd will fail its grader loudly rather than pass on a technicality."""
     exe = shutil.which("bash")
     if exe:
@@ -155,7 +155,7 @@ def t_read_file(args, ctx):
     if not os.path.exists(path):
         return f"Error: file not found: {args.get('path')}"
     if os.path.isdir(path):
-        return f"Error: {args.get('path')} is a directory — use list_directory"
+        return f"Error: {args.get('path')} is a directory: use list_directory"
     if os.path.splitext(path)[1].lower() in BINARY_EXT:
         return f"Error: {args.get('path')} looks binary ({os.path.getsize(path)} bytes)"
     lines = _read_text(path).splitlines()
@@ -230,7 +230,7 @@ def t_append_file(args, ctx):
     after = args.get("after")
     if after:
         if not os.path.exists(path):
-            return f"Error: cannot insert after marker — file not found: {args.get('path')}"
+            return f"Error: cannot insert after marker, file not found: {args.get('path')}"
         lines = _read_text(path).splitlines()
         for i, ln in enumerate(lines):
             if after in ln:
@@ -308,7 +308,7 @@ def t_patch_file(args, ctx):
                 return (f"Patched {_rel(path, ctx['workdir'])} "
                         f"(whitespace-normalised match at line {i + 1})")
     return (f"Error: old_text not found in {args.get('path')}. "
-            f"Read the file first — it may have changed.")
+            f"Read the file first: it may have changed.")
 
 
 def t_search_files(args, ctx):
@@ -552,7 +552,7 @@ def t_ask_user(args, ctx):
     q = args.get("question") or ""
     if ask is None:
         # Non-interactive (worker, benchmark): auto-approve so the run continues,
-        # and record it — an agent that asks instead of acting is a measurable trait.
+        # and record it, an agent that asks instead of acting is a measurable trait.
         ctx["asked"].append(q)
         return "yes (auto-approved: non-interactive session)"
     return ask(q)
@@ -594,7 +594,7 @@ def t_undo_turn(args, ctx):
                      f"{', '.join(res['deleted'][:20])}")
     if res["failed"]:
         parts.append(f"FAILED on {len(res['failed'])}: {'; '.join(res['failed'][:5])}")
-    return "\n".join(parts) or "Checkpoint was empty — nothing to undo."
+    return "\n".join(parts) or "Checkpoint was empty, nothing to undo."
 
 
 def t_remember_fact(args, ctx):

@@ -1,4 +1,4 @@
-"""Prompt classifier and post-turn reviewers — all on the cheap model.
+"""Prompt classifier and post-turn reviewers, all on the cheap model.
 
 Classification decides how much machinery a turn gets:
     TRIVIAL  answer directly from the classifier, never wake the primary model
@@ -15,10 +15,10 @@ from . import providers
 
 CLASSIFY_SYSTEM = """You route prompts for an autonomous coding agent. Reply with EXACTLY one line, no preamble.
 
-TRIVIAL: <answer>   — greetings, trivia, arithmetic, or anything answerable in one sentence with no tools.
-SIMPLE              — a single clear step (read one file, run one command, answer about known context).
-MEDIUM              — a well-specified code task needing a few tool calls.
-COMPLEX: <brief>    — vague, multi-part, or architectural work. <brief> rewrites the request as an
+TRIVIAL: <answer>, greetings, trivia, arithmetic, or anything answerable in one sentence with no tools.
+SIMPLE, a single clear step (read one file, run one command, answer about known context).
+MEDIUM, a well-specified code task needing a few tool calls.
+COMPLEX: <brief>, vague, multi-part, or architectural work. <brief> rewrites the request as an
                       explicit task: concrete goal, the files or areas involved, constraints, and what
                       "done" means. Do NOT solve it, and do NOT invent requirements the user did not state.
 

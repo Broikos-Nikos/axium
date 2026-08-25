@@ -9,7 +9,7 @@
 .idea/
 .vscode/
 
-# API keys and secrets — NEVER commit
+# API keys and secrets, NEVER commit
 config.json
 
 # Personal runtime data
@@ -51,7 +51,7 @@ trajectories/
 # source and are deliberately not ignored.
 bench-python/bench/logs/*.jsonl
 bench-python/versus/logs/
-# Not ignored: bench-python/baseline/ — the fixed point later runs are
+# Not ignored: bench-python/baseline/: the fixed point later runs are
 # compared against, which makes it source rather than a result.
 bench-rust/logs/*.jsonl
 bench-rust/target/

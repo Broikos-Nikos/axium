@@ -1,6 +1,6 @@
-# Axium upgrade — durable context layer, dual benchmarks, ship
+# Axium upgrade, durable context layer, dual benchmarks, ship
 
-**Status:** READY TO COMMIT — all five gates run and green. Paused before git.
+**Status:** READY TO COMMIT, all five gates run and green. Paused before git.
 **Result:** V3 continuity 81% -> 100%, V4 blast radius 47 -> 34 tool calls at 17%
 lower cost, overall versus 94% -> 99% (Orange: 98%). Total gate spend: ~$0.50.
 **Started:** 2026-08-24
@@ -14,8 +14,8 @@ Axium already beats OpenClaw and Hermes on its own bench. It does **not** beat
 Orange head-to-head. Close that gap by porting the specific mechanisms that made
 Orange win, keeping Axium's own identity intact (supercharge classification,
 cheap-model cost routing, skills mode, the local zero-cost fastpath), then split
-the benchmark harness into two standalone projects — one for the Rust build, one
-for the Python build — and push everything to GitHub.
+the benchmark harness into two standalone projects, one for the Rust build, one
+for the Python build, and push everything to GitHub.
 
 Done means all five gates in [Validation](#validation-hard-gates) are green and
 the repos are pushed.
@@ -50,7 +50,7 @@ happens to have it.
 
 ---
 
-## Design decisions (locked — do not relitigate)
+## Design decisions (locked, do not relitigate)
 
 - **Facts live in the SYSTEM prompt, not in history.** Compaction rewrites
   history and cannot touch the system prompt. That is the whole V3 fix.
@@ -68,54 +68,54 @@ happens to have it.
 - **Credential-shaped values are redacted before persistence.** The fact store
   renders into every prompt and nothing in it was reviewed by a human first.
 - **Rust and Python stay behaviourally matched.** Same tool names, same schemas,
-  same skill format, same mode names — otherwise the two benchmarks are not
+  same skill format, same mode names, otherwise the two benchmarks are not
   comparable and the whole exercise is decorative.
 
 ---
 
-## Phase 1 — Python: the durable context layer
+## Phase 1, Python: the durable context layer
 
 New modules under `python/axium/`.
 
-- [x] **`facts.py`** — typed, importance-scored fact store (SQLite, WAL, readers
+- [x] **`facts.py`**, typed, importance-scored fact store (SQLite, WAL, readers
       never create tables). Types: rule / convention / decision / preference /
       gotcha / reference / note. Dedup by `(scope, key)`; restating a fact keeps
       the HIGHER importance. `render()` produces the `[FACTS]` block under an
       1800-char budget. Credential redaction on write. Case-folded search so
       Greek works. Extraction prompt + tolerant `parse_extraction`. Correction
       detector (`looks_like_correction`, EN + EL) floors importance at 0.9.
-- [x] **`brain.py`** — per-project `.axium/`: `PROFILE.md` (human-editable,
+- [x] **`brain.py`**, per-project `.axium/`: `PROFILE.md` (human-editable,
       marker-guarded so a hand-written one is never clobbered), `overview.md`
       rebuilt on a content **fingerprint** rather than a wall-clock TTL,
       `journal.md` newest-first, `preload()` under a 4000-char budget. Empty for
       a project with no brain yet, so first touch costs nothing.
-- [x] **`checkpoints.py`** — per-context turn checkpoints. `record()` snapshots a
+- [x] **`checkpoints.py`**, per-context turn checkpoints. `record()` snapshots a
       file's pre-state before the write; `undo()` restores edited files
       byte-for-byte and deletes files the turn created. 8MB/file cap, 20
       checkpoints retained.
-- [x] **`skills.py`** — the Python half of skills mode, matching the Rust format
+- [x] **`skills.py`**, the Python half of skills mode, matching the Rust format
       (`axium-skills/<name>/*.md`). Three discovery roots, later overriding
       earlier: repo → `~/.axium/skills` → `<workdir>/.axium/skills`. Selector
       prompt copied verbatim from the Rust build. Hallucinated skill names are
       dropped, not read.
-- [x] **`trajectory.py`** — per-session JSONL trace, gated skill distillation
+- [x] **`trajectory.py`**, per-session JSONL trace, gated skill distillation
       (>= 3 turns, >= 4 distinct tools, >= 1 file changed, once per process), and
       failure mining into a `gotcha` fact.
-- [x] **`planner.py`** — cheap-model, brain-grounded plan for COMPLEX tasks.
+- [x] **`planner.py`**, cheap-model, brain-grounded plan for COMPLEX tasks.
       Advisory, never a contract. `is_useful()` rejects an empty or apologetic
       plan so a useless plan costs nothing on every later call.
-- [x] **`config.py`** — `facts_enabled`, `facts_file`, `brain_enabled`,
+- [x] **`config.py`**, `facts_enabled`, `facts_file`, `brain_enabled`,
       `planner_enabled`, `checkpoints_enabled`, `distill_skills`, `skills_dir`.
-- [x] **`classifier.py`** — `extract_facts`, `select_skills`, `plan`,
+- [x] **`classifier.py`**, `extract_facts`, `select_skills`, `plan`,
       `summarise_turn`, `distill_skill`. All on the cheap model, all metered
       under their own role so the bench can price each one.
-- [x] **`tools.py`** — `_snapshot()` helper wired into `write_file`,
+- [x] **`tools.py`**, `_snapshot()` helper wired into `write_file`,
       `append_file`, `patch_file`, `delete_file`, `move_file`. New tools:
       `undo_turn`, `remember_fact`, `recall`, `learn_project`. `new_context()`
       gained `facts`, `checkpoints`, `scope`.
-- [x] **`toolspec.py`** — schemas for the four new tools; `undo_turn` and
+- [x] **`toolspec.py`**, schemas for the four new tools; `undo_turn` and
       `recall` added to the minimal set.
-- [x] **`router.py`** — the wiring.
+- [x] **`router.py`**, the wiring.
       - [x] `Agent.__init__` builds/accepts `facts`, `checkpoints`, `trajectory`
       - [x] `system_prompt()` composes `[PROJECT BRAIN]`, `[LOADED SKILLS]`,
             `[PLAN]`. `providers._anthropic_system` splits the system prompt at
@@ -124,7 +124,7 @@ New modules under `python/axium/`.
             (soul, workdir, project context, Brain, instructions); **below** it
             goes what changes per turn (memory, facts, selected skills, plan).
             Refined from the original plan: skills and the plan belong below the
-            marker too, not just facts — both are chosen per message.
+            marker too, not just facts: both are chosen per message.
       - [x] skills mode: select → render → inject
       - [x] COMPLEX: plan before the tool loop
       - [x] `checkpoints.begin(user_message)` before the loop, `commit()` after
@@ -142,8 +142,8 @@ New modules under `python/axium/`.
             appended only when the subsystem is live.
       - [x] `describe_routing()` now reports which durable-context flags are on.
             Bench headers print it, and a log that does not record its flags
-            cannot be compared against one that had them off — Gate 5 needs this.
-- [x] **`tests/test_wiring.py`** — 25 tests, no API calls (scripted fake provider).
+            cannot be compared against one that had them off, Gate 5 needs this.
+- [x] **`tests/test_wiring.py`**, 25 tests, no API calls (scripted fake provider).
       Covers: fact lands below the cache marker and Brain above it; extraction
       persists across a fresh store; correction floors importance; each flag off
       really removes its subsystem; undo restores bytes exactly; undo deletes
@@ -151,7 +151,7 @@ New modules under `python/axium/`.
       sub-agent has no checkpoint; useless plan dropped; hallucinated skill name
       dropped; journal written only when files changed; failure mined to a gotcha.
 
-## Phase 2 — Rust: mirror it
+## Phase 2, Rust: mirror it
 
 Same mechanisms, same names, same file formats, so one `.axium/` directory and
 one `axium-skills/` tree serve both builds.
@@ -172,16 +172,16 @@ one `axium-skills/` tree serve both builds.
 > "no library targets found", and the debug profile has no cached dependency
 > artifacts.
 
-- [x] `src/memory/facts.rs` — the fact store (rusqlite). Schema, budgets, type
+- [x] `src/memory/facts.rs`, the fact store (rusqlite). Schema, budgets, type
       list, correction floor and extraction format all byte-identical to
       `python/axium/facts.py`, so one `facts.db` serves both builds. Scope
       semantics: a scoped read sees its own facts plus the unscoped ones and
-      never another scope's. Case folding happens in Rust, not SQL — SQLite's
+      never another scope's. Case folding happens in Rust, not SQL, SQLite's
       `LOWER()` is ASCII-only and would silently miss every Greek fact. All
       truncation is char-based; byte-slicing a Greek value panics.
       14 unit tests green. Carries a `#![allow(dead_code)]` with a REMOVE note,
       to be deleted when the router wiring box lands.
-- [x] `src/agent/brain.rs` — profile / fingerprinted overview / journal. File
+- [x] `src/agent/brain.rs`, profile / fingerprinted overview / journal. File
       names, marker and budgets match `python/axium/brain.py`, so one `.axium/`
       serves both builds. `scan` is injected rather than importing the tool layer,
       which keeps the module testable for free. The fingerprint sorts its entries
@@ -195,10 +195,10 @@ one `axium-skills/` tree serve both builds.
       **not** (Rust hashes with `DefaultHasher`, Python with sha256). Whichever
       build touches a shared project second rebuilds its overview exactly once.
       That is one cheap scan, and unifying the hash is not worth a dependency.
-- [x] `src/agent/checkpoints.rs` — per-session turn snapshots. Owned value handed
+- [x] `src/agent/checkpoints.rs`, per-session turn snapshots. Owned value handed
       to the turn context, never process-global, matching Phase 1. Paths are
       **lexically** normalised (not `canonicalize`, which hits the filesystem and
-      fails on a path that does not exist yet — precisely the created-file case),
+      fails on a path that does not exist yet, precisely the created-file case),
       so `app.py`, `./app.py`, `sub/../app.py` and the absolute form are one
       entry rather than four. `BTreeMap` for the file map so the undo report is
       ordered and a benchmark diff stays readable. 17 unit tests green, including
@@ -210,7 +210,7 @@ one `axium-skills/` tree serve both builds.
       and `undo(checkpoint_id)` could revert the wrong turn. Both builds now
       append a monotonic sequence number. Three Python tests added for it plus
       out-of-order undo and the abandoned-checkpoint path (28 Python tests).
-- [x] `src/agent/planner.rs` — grounded plan for complex tasks. Prompt text and
+- [x] `src/agent/planner.rs`, grounded plan for complex tasks. Prompt text and
       thresholds match `python/axium/planner.py` so a scenario plans identically
       in both benchmarks. `build_prompt` puts the Brain before the facts before
       the task: the model reads ground truth about the project before it reads
@@ -219,7 +219,7 @@ one `axium-skills/` tree serve both builds.
       rejects refusals. 14 unit tests green.
 - [x] **ported back to Python** (two real defects the Rust tests exposed):
       1. Step counting used `line.strip()[:2].rstrip(".").isdigit()`, which
-         counts a **pasted line-numbered file listing** as a plan — a code dump
+         counts a **pasted line-numbered file listing** as a plan, a code dump
          with 4-digit line numbers scored as a five-step plan and got injected
          into every call of the loop. Now capped at two digits.
       2. The same expression rejected `1)` and `1 - ` markers, so a perfectly
@@ -228,12 +228,12 @@ one `axium-skills/` tree serve both builds.
          whitespace-only Brain or fact block announced "[STANDING FACTS AND
          RULES]" and then showed none.
       Five Python tests added (32 total).
-- [x] `src/agent/trajectory.rs` — trace + gated distillation. Thresholds, file
+- [x] `src/agent/trajectory.rs`, trace + gated distillation. Thresholds, file
       layout and the distillation prompt match `python/axium/trajectory.py`, so a
       skill distilled by one build is selectable by the other. The JSONL log is
       written **before** the in-memory window is trimmed, so a long session keeps
       a complete trace on disk while the prompt window stays capped. Skill names
-      are validated as strict kebab-case and rejected rather than sanitised — the
+      are validated as strict kebab-case and rejected rather than sanitised, the
       name becomes a directory, and quietly repairing `../../etc/passwd` hides
       that the model produced it. 16 unit tests green.
       *(Failure mining lives in `memory/facts.rs::mine_failure` on the Rust side,
@@ -243,7 +243,7 @@ one `axium-skills/` tree serve both builds.
       joined it straight onto the skills root. `parse_skill` validates, but a
       hand-built dict would have written outside the root. Both builds now
       re-validate at the write. Two Python tests added (34 total).
-- [x] `src/agent/classifier.rs` — `extract_facts`, `plan`, `summarise_turn`,
+- [x] `src/agent/classifier.rs`, `extract_facts`, `plan`, `summarise_turn`,
       `distill_skill` added alongside the existing `analyze_skills`. All four run
       on the cheap model through the existing `call_llm`, and all four fail soft:
       a failure in the learning layer costs a fact, a plan or a journal line,
@@ -273,7 +273,7 @@ one `axium-skills/` tree serve both builds.
       - `MINIMAL_TOOL_NAMES` gained `undo_turn` and `recall`, matching Python.
       - 11 tests. Includes cross-build parity assertions (all four tools
         registered, present in the minimal set, unique names, well-formed
-        schemas) — verified to hold on the Python side too.
+        schemas), verified to hold on the Python side too.
 - [x] **design correction made while wiring:** `snapshot()` first took
       `&TurnConfig` and reached into one field, which made it untestable without
       constructing all ~35 fields including a live HTTP client and a real SQLite
@@ -283,7 +283,7 @@ one `axium-skills/` tree serve both builds.
       **Note for the router-wiring box:** the four channel entry points
       (`cli.rs`, `telegram.rs`, `tui/server.rs`, `worker.rs`) currently pass
       `facts: None, checkpoints: None`. Populating them is that box's job.
-- [x] `src/agent/router.rs` — the same wiring as Phase 1.
+- [x] `src/agent/router.rs`, the same wiring as Phase 1.
       - Brain preloaded above the cache breakpoint; `[FACTS]`, `[LOADED SKILLS]`
         and `[PLAN]` below it. Subsystem instructions emitted only when their
         subsystem is live.
@@ -294,7 +294,7 @@ one `axium-skills/` tree serve both builds.
       - `after_turn()`: extract facts (floored on a detected correction), write
         the journal entry, record the trajectory, distil a skill when the gates
         pass. `mine_turn_failure()` converts a failed turn into a `gotcha` and
-        then **re-raises** — it records, it never swallows.
+        then **re-raises**, it records, it never swallows.
       - Sub-agents get no skills, no plan, no checkpoint and no post-turn pass.
       - `TurnConfig` gained `brain_enabled`, `planner_enabled`, `distill_skills`,
         `trajectory`, `skills_dir`. 9 wiring tests (100 Rust total).
@@ -304,19 +304,19 @@ one `axium-skills/` tree serve both builds.
          selected a different skill invalidated the entire cached prefix. Moved
          below the marker with the other volatile blocks.
       2. Caught by a test written for exactly this: with a Brain block present the
-         assembled prompt ended `...Stack: Python.\n[MEMORY]\n` — **one** newline,
+         assembled prompt ended `...Stack: Python.\n[MEMORY]\n`, **one** newline,
          where `sonnet.rs` matches `"\n\n[MEMORY]\n"` literally. The near-miss
          silently disables prompt caching for every request of the session while
          the prompt still looks correct. The marker is now a named constant
          (`SYSTEM_CACHE_MARKER`) joined onto a `trim_end()`ed head, so it cannot
          depend on whether the last block happened to end in a newline.
       **Known transitional state:** `FactStore::open`, `Checkpoints::new` and
-      `Trajectory::new` are still dead code — every channel passes `None`, because
+      `Trajectory::new` are still dead code, every channel passes `None`, because
       constructing them is the config box below. That box closes these warnings.
-- [x] `src/config/loader.rs` — the same seven settings, names and defaults
+- [x] `src/config/loader.rs`, the same seven settings, names and defaults
       matching `python/axium/config.py` so one config.json drives either build.
       All `#[serde(default)]`, so a config written for the old schema still loads
-      — verified by a test, because otherwise upgrading the binary breaks every
+, verified by a test, because otherwise upgrading the binary breaks every
       existing install. `distill_skills` is the one that defaults **off**: it
       writes to the skills tree, and a skill distilled from a mediocre session is
       then selected by name for the rest of the install's life. Startup validation
@@ -324,8 +324,8 @@ one `axium-skills/` tree serve both builds.
       at the first fact write, after a turn has already been paid for.
       Added `resolve_data_path()` so every channel puts the fact store beside the
       memory file. 6 tests. Both `config.example.json` files updated.
-- [x] **the settings now do something** — this is what closes the transitional
-      state the previous box left:
+- [x] **the settings now do something**: this is what closes the transitional
+      state the previous box left
       - `DurableContext::new()` builds the fact store, checkpoint stack and
         session trace from settings, in **one** place so all four channels agree.
         A store that fails to open logs and degrades to `None` rather than
@@ -353,7 +353,7 @@ one `axium-skills/` tree serve both builds.
         confirm the rewrite changed nothing.
       - **The real find:** clippy flagged "stripping a prefix manually" in seven
         places, which turned out to be seven copy-pasted copies of the same
-        tilde-expansion block — and the copies had **drifted**. The bare-`~`
+        tilde-expansion block, and the copies had **drifted**. The bare-`~`
         branch fell back to `"."` when `HOME` was unset while the `~/foo` branch
         fell back to `""`, so on a machine without `HOME` the same config
         resolved to the current directory in one place and to the filesystem
@@ -372,13 +372,13 @@ one `axium-skills/` tree serve both builds.
 **Phase 2 is complete.** Both builds now carry the durable-context layer with
 matching tool names, schemas, file formats and settings.
 
-## Phase 3 — Two standalone benchmark projects
+## Phase 3, Two standalone benchmark projects
 
 Today the harness lives inside `python/`. Split it so each build is measured by
 its own project, with the same scenarios, the same graders and the same JSONL
-schema — otherwise the two numbers cannot be compared.
+schema, otherwise the two numbers cannot be compared.
 
-- [x] **`bench-python/`** — standalone project with its own README, requirements,
+- [x] **`bench-python/`**, standalone project with its own README, requirements,
       pyproject and .gitignore. `python/bench/` and `python/versus/` moved across
       (originals removed only after a `diff -rq` confirmed the copies were
       byte-identical apart from the three path bootstraps). `--sanity`,
@@ -386,8 +386,8 @@ schema — otherwise the two numbers cannot be compared.
       verified working from the new location; the baseline `versus` logs came
       with it, so the V1-V5 evidence this whole plan rests on is still readable.
       **How it reaches the agent it measures:** `axium_path.py` resolves the
-      `axium` package at import time — `AXIUM_PYTHON` env var, else `../python`,
-      else whatever is importable — and fails with a message naming the env var
+      `axium` package at import time, `AXIUM_PYTHON` env var, else `../python`,
+      else whatever is importable, and fails with a message naming the env var
       rather than a bare ImportError thirty frames deep. Deliberately *not*
       vendored: a vendored copy drifts, and then you are benchmarking a stale
       agent without knowing it. Both the override and the failure path tested.
@@ -396,25 +396,25 @@ schema — otherwise the two numbers cannot be compared.
 > before the shared definitions, which would mean writing every scenario twice
 > and then merging. Worse, starting `bench-rust/` surfaced two prerequisites the
 > plan had simply assumed: the Rust binary has **no one-shot mode** (it is an
-> interactive REPL, a web server or a Telegram bot — nothing a harness can drive)
+> interactive REPL, a web server or a Telegram bot: nothing a harness can drive)
 > and **no pricing or per-turn metrics at all** (`sonnet.rs` collected `ApiUsage`
 > per API call and dropped it). Without the second, a Rust-vs-Python cost
 > comparison would have been fiction. Prerequisites first, then shared
 > definitions, then the harness that consumes them.
 
-- [x] **Rust turn metrics + pricing** (`src/agent/metrics.rs`) — `Meter`,
+- [x] **Rust turn metrics + pricing** (`src/agent/metrics.rs`), `Meter`,
       `TurnMetrics`, and a pricing table mirroring `python/axium/pricing.py`.
       Records per-call tokens, per-role cost split, tool histogram, named
       counters and wall time. `BTreeMap` throughout so two runs of a scenario
       produce byte-identical JSON and a diff shows real changes only.
       An unpriced model is reported in `unpriced_models` rather than silently
       costing $0.0000 and corrupting every comparison. 12 tests, including a
-      **parity test against captured `pricing.py` output** — the expected values
+      **parity test against captured `pricing.py` output**, the expected values
       come from actually running the Python implementation, not from re-deriving
       them off the same table, which would have proved nothing.
 - [x] **Meter threaded through the turn.** Primary/continuation calls are billed
       by role (call 1 carries the reasoning on the primary model, later calls are
-      mechanical on the cheap one — billing them apart is the whole point of the
+      mechanical on the cheap one, billing them apart is the whole point of the
       cost split). The classifier routes every cheap pass through one
       `call_llm_as(role, ..)` wrapper, so metering is **structural**: a new pass
       cannot forget to meter itself. Tools are timed at the spawn site, not the
@@ -422,35 +422,35 @@ schema — otherwise the two numbers cannot be compared.
       the slowest sibling in its batch made it wait. Event counters wired
       (`trivial_shortcut`, `prompt_enhanced`, `skills_loaded`, `planned`,
       `compactions`, `facts_learned`). Added `SonnetClient::model()` so the meter
-      bills the model that actually **answered** — a fallback swap would
+      bills the model that actually **answered**: a fallback swap would
       otherwise be priced at the primary's rate.
 - [x] **`--once` one-shot mode** (`src/channels/once.rs`). One JSON object on
       stdout, logs on stderr, so a caller parses stdout without filtering noise.
       Carries text, changed files, prompt class and the full `TurnMetrics`.
       `--session` keeps history and memory across separate invocations, so a
       multi-turn scenario driven as several processes behaves as one conversation
-      — exactly what the continuity scenario needs.
+, exactly what the continuity scenario needs.
       **Bug caught by running it:** `ok` was `true` after four failed API calls
       and empty output, because the router swallows an auth failure and returns
       `Ok("")`. A benchmark would have scored that as a successful turn. `ok` now
       means the turn *produced* something (text or a file change), with the
       errors surfaced in the result.
-- [x] **`base_turn_config()`** — the four channels each spelled out all ~35
+- [x] **`base_turn_config()`**, the four channels each spelled out all ~35
       `TurnConfig` fields. That duplication is what produced the seven drifted
       copies of tilde expansion, and made every new field a five-file edit.
       Callers now build from the base and override only what is theirs. Also
       promoted `mode` to a real setting with `mode_or_default()`, since an empty
       string sends the router down its fall-through branch and silently disables
       classification.
-- [x] **Shared scenario definitions** — `bench-python/export_scenarios.py` writes
+- [x] **Shared scenario definitions**, `bench-python/export_scenarios.py` writes
       `scenarios.json` (17 bench + 5 versus). The Python definitions stay the
       single source. Graders are deliberately **not** exported: they are Python
       that imports and executes the agent's output code, so `bench-rust` shells
       out to them rather than reimplementing them. `--check` fails when a scenario
-      is edited without re-exporting — verified by mutating the file and watching
+      is edited without re-exporting, verified by mutating the file and watching
       it fail. Two suites that have silently drifted apart while still looking
       comparable are worse than not comparing at all.
-- [x] **`bench-rust/`** — a Cargo project that drives the real binary: one
+- [x] **`bench-rust/`**, a Cargo project that drives the real binary: one
       `axium --once` per turn, against a freshly generated copy of the same seed,
       graded by the same graders through `bench-python/bridge.py`, written as the
       same JSONL row with `impl: "rust"`. The Python report reads either
@@ -464,18 +464,18 @@ schema — otherwise the two numbers cannot be compared.
       Python-flavoured configs get the fields the Rust loader requires, each
       ablation flips exactly one setting, the log tag matches the Python rule, a
       missing binary reports instead of panicking, a hung process is killed.
-      Subprocess output is drained on threads — reading pipes after `wait()`
+      Subprocess output is drained on threads, reading pipes after `wait()`
       deadlocks once a buffer fills, and a chatty agent fills stderr fast.
       **Added after a near-miss:** rows carry `config.binary` and
       `binary_mtime`. `cargo test` builds a test executable, not `axium.exe`, and
       a suite will happily measure a binary from before the change.
 - [x] Ablation flags in both runners: `--no-facts`, `--no-brain`,
-      `--no-planner`, `--no-checkpoints`. Each flips exactly one setting —
-      asserted by a test on the Rust side and verified on the Python side — and
+      `--no-planner`, `--no-checkpoints`. Each flips exactly one setting,
+      asserted by a test on the Rust side and verified on the Python side, and
       each lands in its own log tag (`__nofacts`, `__nofacts-nobrain-…`), so an
       ablation can never average into the default config's numbers.
 - [x] Three mechanism scenarios (M1-M3), each paired with the ablation flag that
-      should reopen its failure — which is what makes Gate 5 a real test:
+      should reopen its failure, which is what makes Gate 5 a real test
       - **M1** `--no-facts`: a rule stated in turn 1 must still govern the turn
         after three filler turns. This is the V3 failure as a bench scenario.
       - **M2** `--no-checkpoints`: "put it back exactly" is graded **byte for
@@ -491,9 +491,9 @@ schema — otherwise the two numbers cannot be compared.
       and the troubleshooting entries the work actually produced (stale
       `scenarios.json`, a Rust row measured against a stale binary).
 
-## Phase 4 — Validation (hard gates)
+## Phase 4, Validation (hard gates)
 
-- [x] **Gate 1 — imports and unit tests. RUN, GREEN.** 18 Python modules import
+- [x] **Gate 1, imports and unit tests. RUN, GREEN.** 18 Python modules import
       on the real interpreter. 34 Python + 126 Rust (axium) + 8 Rust
       (bench-rust) tests pass. `cargo build` and `cargo clippy` both report
       **zero** warnings across both Rust projects. Every named case is covered:
@@ -503,17 +503,17 @@ schema — otherwise the two numbers cannot be compared.
       undo restores bytes exactly and deletes created files; `parse_extraction`
       survives malformed lines; `parse_selection` drops unknown skills;
       `parse_skill` rejects junk JSON.
-- [x] **Gate 2 — sanity, both suites. RUN, GREEN.** `bench.runner --sanity`
+- [x] **Gate 2, sanity, both suites. RUN, GREEN.** `bench.runner --sanity`
       (17 gradeable scenarios), `versus.runner --sanity` (5) and
       `bench-rust --sanity` (23) all clean, plus `export_scenarios.py --check`
       confirming the shared definitions are current. Free: no API calls.
-- [x] **Gate 3 — no regression. RUN, PASS.** 23 scenarios, change **98.9%**,
+- [x] **Gate 3, no regression. RUN, PASS.** 23 scenarios, change **98.9%**,
       regress **100%**, cost $0.068. On the 20 scenarios the baseline also ran:
       **100% -> 100%** change, 100% regress. Nothing regressed. The only
       sub-100% is M2 at 3/4, a new scenario with no baseline, and its miss is
-      "used undo_turn rather than rewriting by hand" — the agent restored the
+      "used undo_turn rather than rewriting by hand", the agent restored the
       files correctly by hand that run. Variance in approach, not damage.
-- [x] **Gate 4 — the gap actually closed. RUN, PASS.** Axium, 3 reps, same seed
+- [x] **Gate 4, the gap actually closed. RUN, PASS.** Axium, 3 reps, same seed
       and graders as the baseline. Cost $0.22.
 
       | axis | base | now | Orange | tools b→n | cost b→n |
@@ -523,7 +523,7 @@ schema — otherwise the two numbers cannot be compared.
       | **V3 continuity** | **81%** | **100%** | 100% | 24 → 22 | $0.0133 → $0.0177 |
       | **V4 blast radius** | 97% | **100%** | 100% | **47 → 34** | $0.0193 → **$0.0161** |
       | V5 economy | 94% | 97% | 97% | 13 → 12 | $0.0050 → $0.0084 |
-      | **OVERALL** | **94%** | **99%** | 98% | **107 → 92** | — |
+      | **OVERALL** | **94%** | **99%** | 98% | **107 → 92** |, |
 
       **V3 went 0.71 / 1.00 / 0.71 → 1.00 / 1.00 / 1.00.** That is the gate, and
       it is the failure this whole plan was written to fix. **V4 reached 12/12 on
@@ -533,13 +533,13 @@ schema — otherwise the two numbers cannot be compared.
       Axium now edges Orange overall (99% vs 98%) and matches or beats it on
       every axis except V5, where they tie at 97%.
 
-      **Honest caveat on cost.** Per-session cost is UP on V1, V2, V3 and V5 —
+      **Honest caveat on cost.** Per-session cost is UP on V1, V2, V3 and V5,
       the durable-context layer adds cheap-model calls (fact extraction, the
       journal, the planner) to every turn. It pays for itself on V4, where undo
       replaces reconstruction. Overall the suite got more correct and slightly
       more expensive; "cost per point must not get worse anywhere" as originally
       written is **not** met, and I am recording that rather than reframing it.
-- [x] **Gate 5 — ablations prove attribution. RUN.** Total cost $0.03.
+- [x] **Gate 5, ablations prove attribution. RUN.** Total cost $0.03.
 
       | scenario | mechanism on | ablated | flag |
       |---|---|---|---|
@@ -554,7 +554,7 @@ schema — otherwise the two numbers cannot be compared.
 
       **M2 and M3 are weaker than they look, and the honest reading matters.**
       In both, the ablation flipped only the check that tests the mechanism's
-      *presence* — "used undo_turn", "the Brain exists" — not one that tests its
+      *presence* ("used undo_turn", "the Brain exists") not one that tests its
       *benefit*. With checkpoints off the agent still reconstructed the files
       byte-exactly that run; with the Brain off it still answered without
       re-exploring. So these two ablations demonstrate the flag works, not that
@@ -566,7 +566,7 @@ schema — otherwise the two numbers cannot be compared.
       rather than quietly counted as a pass.
 
 
-## Phase 5 — Ship
+## Phase 5, Ship
 
 > **PAUSE POINT (user instruction, 2026-08-25):** the loop stops **before** the
 > first commit. Finish the `.gitignore`, secret sweep and README boxes, then
@@ -576,7 +576,7 @@ schema — otherwise the two numbers cannot be compared.
 
 
 - [x] `.gitignore` covers `.axium/`, `facts.db*`, `trajectories/`, checkpoints,
-      all three log directories and both build dirs — and deliberately does NOT
+      all three log directories and both build dirs, and deliberately does NOT
       cover the seed fixtures, the scenario definitions or `scenarios.json`,
       which are source.
       Also removed three stale `.bak` files that had been sitting untracked, and
@@ -608,7 +608,7 @@ Each iteration:
 2. Do that one task completely, including its tests.
 3. Tick the box. Append a dated line to [Progress log](#progress-log) saying what
    changed and what it cost. If something was learned that changes a later phase,
-   edit that phase now — this file is the plan, not a record of the old plan.
+   edit that phase now: this file is the plan, not a record of the old plan.
 4. If a task turns out to be wrong or impossible, do not silently drop it: strike
    it, write one line saying why, and add whatever replaces it.
 5. Never mark a Validation gate green without running it. A gate ticked from
@@ -628,7 +628,7 @@ Guardrails:
 
 ---
 
-## Phase 6 — two more Orange ports, measured and REJECTED as defaults
+## Phase 6, two more Orange ports, measured and REJECTED as defaults
 
 Both were implemented in full, unit-tested, given ablation flags, and
 benchmarked. Neither earned a default. Recording the negative result, because a
@@ -639,9 +639,9 @@ feature that ships on a hunch is how a benchmark stops meaning anything.
       a fresh interpreter, then run the project's own test suite; hand any
       failure back to the agent as another round. Discovery is by convention
       (acceptance.py, pytest, npm test). An unverifiable project **skips** rather
-      than fails — "we could not verify" and "it is broken" are different claims.
+      than fails, "we could not verify" and "it is broken" are different claims.
       Added scenario **M4**, a cross-module rename where every file still parses
-      if the caller is missed and only *running* it reveals the break — the one
+      if the caller is missed and only *running* it reveals the break, the one
       defect class a syntax check cannot score.
       **Result: no measured benefit.** 4/4 with it, 4/4 without, on BOTH
       deepseek-v4-pro and deepseek-v4-flash, 3 reps each. Verification fired
@@ -652,15 +652,15 @@ feature that ships on a hunch is how a benchmark stops meaning anything.
       Deliberately counts only `patch_file`/`write_file`/`append_file`: a
       `run_command` exiting non-zero is usually the agent correctly finding a
       broken test, and counting it would escalate on honest work.
-      **Result: never fired.** Across **21 runs** on the cheap model — the fix
-      and refactor families, the ones most likely to miss a patch target —
+      **Result: never fired.** Across **21 runs** on the cheap model, the fix
+      and refactor families, the ones most likely to miss a patch target:
       there were **zero failed edits**, so the trigger never engaged once. This
       is not "it did not help"; it is "the condition never arose", which is a
       weaker and more honest claim.
 
 **Both default to OFF**, with the evidence in the config comments. They are kept
 rather than deleted because they are correct, tested (11 new tests), free when
-off, and the bench seed — 9 small clean Python files — cannot produce the
+off, and the bench seed, 9 small clean Python files, cannot produce the
 failures they guard. Orange needed them for live PHP sites, which is a different
 workload. Turn them on and measure on a real project before trusting them.
 
@@ -670,14 +670,14 @@ every fix and refactor. A suite where the cheap model ties the expensive one
 cannot rank agents, and it is why neither feature could be evaluated properly.
 The next real work is harder scenarios, not more features.
 
-## Phase 7 — the real head-to-head: OpenClaw and Hermes
+## Phase 7, the real head-to-head: OpenClaw and Hermes
 
 ### What the prior research already established (found, not redone)
 
 A subagent session under `orange` in June 2026 did this groundwork and its
 conclusion was explicit and honest: **the head-to-head was NOT attempted.** It
-recorded three blockers — installing third-party software system-wide, API keys
-plus token spend for two more harnesses, and a benchmark adapter per harness —
+recorded three blockers, installing third-party software system-wide, API keys
+plus token spend for two more harnesses, and a benchmark adapter per harness,
 and left them as an open question for Nikolaos rather than dressing them up as
 tool limitations. That authorisation has now been given.
 
@@ -687,13 +687,13 @@ Verified facts from that research, re-confirmed live on 2026-08-25:
 |---|---|---|---|
 | repo | `openclaw/openclaw` | `NousResearch/hermes-agent` | this |
 | language | TypeScript | Python | Rust + Python |
-| stars | 387,521 | 236,069 | — |
-| licence | MIT (LICENSE file; GitHub's API wrongly says NOASSERTION) | MIT | — |
-| last push | 2026-08-25 | 2026-08-25 | — |
+| stars | 387,521 | 236,069 |, |
+| licence | MIT (LICENSE file; GitHub's API wrongly says NOASSERTION) | MIT |, |
+| last push | 2026-08-25 | 2026-08-25 |, |
 
 The architectural finding worth keeping: **all four harnesses share a
 persona-file convention.** Hermes ships `hermes claw migrate`, which reads
-`~/.openclaw` and imports settings, memories, skills and keys — first item in
+`~/.openclaw` and imports settings, memories, skills and keys, first item in
 its import list is `SOUL.md`. Axium loads `soul.md` as its cached static block.
 OpenClaw's Gateway/ControlUI/CLI/TUI/channels split is the same shape as Axium's
 `tui/server.rs` + `channels/{cli,telegram}.rs` + `worker.rs`.
@@ -701,14 +701,14 @@ OpenClaw's Gateway/ControlUI/CLI/TUI/channels split is the same shape as Axium's
 ### Harder scenarios (medium → extremely hard)
 
 - [x] **A second seed built to be hard** (`bench/hard_fixtures.py`): a ~500-line,
-      12-file billing engine — proration, VAT jurisdictions, minor-unit money,
+      12-file billing engine, proration, VAT jurisdictions, minor-unit money,
       gateway retries, an audit log, reconciliation. Design taken from
       `playground/bllm/evals/fixbench_real.py`, which hit this same saturation
       first: *"the file is hundreds of lines, so the bug has to be found before
       it can be fixed, and there is no failing test to follow, only a
       description of the symptom."*
       The seed ships its own `tests/smoke.py` which is **green with every defect
-      present** — deliberately, so the scenarios cannot be solved by running the
+      present**, deliberately, so the scenarios cannot be solved by running the
       tests.
 - [x] **Five tiered scenarios** (`bench/hard_scenarios.py`), `--tier` flag:
       | id | tier | the defect |
@@ -742,7 +742,7 @@ OpenClaw's Gateway/ControlUI/CLI/TUI/channels split is the same shape as Axium's
 ### Harnesses installed
 
 - [x] **Hermes** cloned to `C:	ools\harnesses\hermes-agent`, installed into
-      its **own venv** (Python 3.12 — it requires <3.14 and the system is 3.14.4)
+      its **own venv** (Python 3.12, it requires <3.14 and the system is 3.14.4)
       rather than system-wide. Four light deps. Deliberately contained and
       reversible: the prior research flagged `curl|bash` system-wide installs as
       the user's call, and a venv respects that even with authorisation given.
@@ -754,7 +754,7 @@ OpenClaw's Gateway/ControlUI/CLI/TUI/channels split is the same shape as Axium's
 - [x] **OpenClaw** installed to `C:\tools\harnesses\openclaw` as a **local npm
       package** (its own `package.json`), not `npm i -g` and not the documented
       `curl|bash`. npm blocked its postinstall scripts, which is why its model
-      catalogue started empty — safer default, and the fix was config, not
+      catalogue started empty, safer default, and the fix was config, not
       lowering the guard.
       Getting DeepSeek registered took four wrong turns worth recording, because
       each error message was the thing that taught the next step:
@@ -768,11 +768,11 @@ OpenClaw's Gateway/ControlUI/CLI/TUI/channels split is the same shape as Axium's
       OPENCLAW_WORKSPACE_DIR=<build> openclaw --profile bench agent --local --json \
         --session-id <id> --model deepseek/deepseek-v4-pro -m "<prompt>"
       ```
-      `OPENCLAW_WORKSPACE_DIR` is the working-directory control — it uses a
+      `OPENCLAW_WORKSPACE_DIR` is the working-directory control, it uses a
       workspace, not cwd, and without it the agent correctly reports the file
       does not exist.
 
-### All three harnesses drive the same model — the comparison is now possible
+### All three harnesses drive the same model: the comparison is now possible
 
 | | invocation | working dir | metrics returned |
 |---|---|---|---|
@@ -784,7 +784,7 @@ All three take a session id for multi-turn, which the continuity scenarios need.
 OpenClaw's usage block maps cleanly onto Axium's; Hermes's still has to be found.
 
 **The measurement this enables, and why it is the right one.** Correctness
-saturates — both DeepSeek models solve every tier including "extremely hard".
+saturates, both DeepSeek models solve every tier including "extremely hard".
 Holding the model fixed and varying only the harness makes tokens, tool calls
 and wall time the discriminator, and those are properties of the harness rather
 than the model. So the head-to-head reports **cost-to-correct**, not correctness.
@@ -1459,13 +1459,13 @@ without mentioning it. Finished, but did not reach the goal.
 
 ## Progress log
 
-- **2026-08-25, iteration 16 — gates run. Three real bugs found, all by running
+- **2026-08-25, iteration 16, gates run. Three real bugs found, all by running
   rather than reading.** Budget: the whole gate campaign has cost under $0.05 so
   far, far below the $2-3 ceiling.
 
   **1. The TRIVIAL fastpath bypassed memory entirely.** M1 failed 1/3 on the
   first run. The fact was stored correctly (`facts_learned: 1`,
-  `remember_fact` called) — but the recall question was classified TRIVIAL, and
+  `remember_fact` called), but the recall question was classified TRIVIAL, and
   the classifier answers TRIVIAL itself without ever reaching the agent, so it
   never saw the `[FACTS]` block. It replied *"I don't have that information"*
   about a fact sitting in its own store two turns earlier. This is the V3 bug
@@ -1474,7 +1474,7 @@ without mentioning it. Finished, but did not reach the goal.
   on the cheap path AND makes it fact-aware. M1 went 1/3 → **3/3**.
 
   **2. bench-rust was scoring a false pass on M1.** It read `warmup`/`followup`
-  from the shared file and never ran them, so it graded the *setup* turn — which
+  from the shared file and never ran them, so it graded the *setup* turn, which
   naturally repeats "€50" because the user had just said it. It reported 3/3 on
   a scenario it was not running. Now wired for multi-turn via `--session`, and
   the pristine copy for M2 too. This is the failure mode that matters most in a
@@ -1490,13 +1490,13 @@ without mentioning it. Finished, but did not reach the goal.
   panicked. **This one would have shipped**: no unit test covered it and it never
   fires on ASCII-only output.
 
-  **4. Two graders had gone stale against my own change — both scoring a correct
+  **4. Two graders had gone stale against my own change, both scoring a correct
   agent as wrong.** `X1` (memory persistence) required `update_memory`
   specifically; the agent now persists via `remember_fact`, which is the same
   behaviour through the newer store, and X1 scored **0/3** for it. `versus`'s
   `memory_tools()` set listed `remember` but not `remember_fact`, so V3's "used a
   memory or note tool" failed for the same reason. Both fixed to accept either
-  durable store — the check should measure *whether it remembered*, not which
+  durable store: the check should measure *whether it remembered*, not which
   vocabulary it used. Worth noting these are failures of the **benchmark**, and I
   only found them because the scores moved in a direction that did not match the
   code.
@@ -1505,19 +1505,19 @@ without mentioning it. Finished, but did not reach the goal.
   reached its log-write step, so 21 scenarios' worth of API spend produced no
   rows at all. The runner writes logs only after the whole suite finishes. Re-run
   unbuffered without a timeout. Cheap lesson, but it is why the suite should
-  probably append per scenario rather than per suite — noted as follow-up.
+  probably append per scenario rather than per suite, noted as follow-up.
 
   128 Rust tests green, clippy clean, 34 Python green.
 
-- **2026-08-25, iteration 15 — PAUSED BEFORE COMMIT (as instructed).**
+- **2026-08-25, iteration 15, PAUSED BEFORE COMMIT (as instructed).**
   Phase 3 and the free half of Phases 4-5 are done. `bench-rust/` exists and runs
   end to end: an X2 scenario went generate → `axium --once` → grade → row → the
   Python report read it, scoring 4/4 for $0.00002. 126 + 8 + 34 tests green,
   clippy clean on both Rust projects, Gates 1 and 2 run and green, secret sweep
   clean over all 87 files git would add.
 
-  Things this iteration changed because the work showed they were wrong:
-  - `export_scenarios.py` was exporting `SCENARIOS`, not `ALL` — it had silently
+  Things this iteration changed because the work showed they were wrong
+  - `export_scenarios.py` was exporting `SCENARIOS`, not `ALL`: it had silently
     been leaving the three behaviour scenarios out of the shared file since the
     box was ticked. Now 23, not 17.
   - The call role was billed by call index (`iterations == 0` → primary). A
@@ -1534,56 +1534,56 @@ without mentioning it. Finished, but did not reach the goal.
   - The M2 pristine snapshot keyed off a substring of the scenario name. Made it
     an explicit field: a rename would have silently scored 0/4 forever.
 
-  **Gates 3, 4 and 5 are NOT run — they need paid API runs** (roughly: Gate 3 a
+  **Gates 3, 4 and 5 are NOT run: they need paid API runs** (roughly: Gate 3 a
   full 20-scenario bench, low single-digit dollars; Gate 4 a 3-rep versus, the
   same again; Gate 5 four ablation runs). They are the gates that prove the
   upgrade actually closed the V3/V4 gap, so the work is not *finished* until they
-  are green — but nothing further can be verified for free. Ask before spending.
+  are green, but nothing further can be verified for free. Ask before spending.
 
   ### Proposed commits (nothing has been run)
 
   Seven, in dependency order, each independently reviewable:
 
-  1. `feat(python): durable context layer — facts, brain, checkpoints, skills, trajectory, planner`
+  1. `feat(python): durable context layer, facts, brain, checkpoints, skills, trajectory, planner`
   2. `feat(rust): mirror the durable context layer`
   3. `feat(rust): per-turn metrics and pricing, parity-tested against the Python table`
   4. `feat(rust): --once one-shot mode so the binary can be benchmarked`
-  5. `refactor: base_turn_config + expand_home — kill two duplications that had already drifted`
+  5. `refactor: base_turn_config + expand_home, kill two duplications that had already drifted`
   6. `bench: split into bench-python and bench-rust over shared scenarios`
   7. `docs: BENCHMARKS.md, READMEs, AXIUM_UPGRADE.md`
 
   Push targets: `axium` → the existing remote. `bench-python` and `bench-rust`
   currently live **inside** the axium repo. The plan says "own repos", which is
-  now a decision to make rather than assume — they share `scenarios.json` and
+  now a decision to make rather than assume, they share `scenarios.json` and
   `bridge.py` across the boundary, so splitting them into separate repos means
   either vendoring or a submodule. **Recommend keeping them in this repo** and
   dropping that box; flagging it rather than deciding unilaterally.
 
-- **2026-08-25, iteration 14** — Three boxes in one pass: Meter threaded through
+- **2026-08-25, iteration 14**: Three boxes in one pass: Meter threaded through
   the turn, `--once` one-shot mode, and the shared `scenarios.json`. 125 Rust + 34
   Python tests green, clippy clean, and `--once` verified end to end against a
   real binary run. Two things worth recording. **A real bug, found by actually
   running the thing rather than by reading it:** `--once` reported `ok: true`
   after four failed API calls with empty output, because the router swallows an
   auth failure and returns `Ok("")`. A benchmark would have scored that as a
-  successful turn — the exact class of error that makes a suite report confident
+  successful turn, the exact class of error that makes a suite report confident
   nonsense. `ok` now means the turn produced something. **A refactor that paid for
   itself immediately:** adding `--once` would have meant a fifth copy of the ~35
   field `TurnConfig` literal, so I extracted `base_turn_config()` first. That
   duplication is the same one that produced the seven drifted tilde-expansion
-  copies two iterations ago. Also made metering structural in the classifier —
-  one `call_llm_as(role, ..)` wrapper — so a future cheap pass cannot be added
+  copies two iterations ago. Also made metering structural in the classifier,
+  one `call_llm_as(role, ..)` wrapper, so a future cheap pass cannot be added
   unmetered and silently under-report the turn's cost. Cost: zero API (the
   end-to-end run used placeholder keys and exercised the error path).
   **Next:** `bench-rust/` itself, which now has everything it needs.
 
-- **2026-08-25, iteration 13** — Started `bench-rust/` and immediately hit two
+- **2026-08-25, iteration 13**: Started `bench-rust/` and immediately hit two
   prerequisites the plan had assumed away, so this iteration became the first of
-  them plus a phase reorder. (1) The Rust binary has **no one-shot mode** — it is
+  them plus a phase reorder. (1) The Rust binary has **no one-shot mode**: it is
   an interactive REPL, a web server or a Telegram bot, none of which a harness can
   drive. (2) It has **no pricing and no per-turn metrics at all**: `sonnet.rs`
   collected `ApiUsage` per API call and dropped it on the floor. The second is the
-  serious one — a Rust-vs-Python cost comparison would have produced numbers that
+  serious one, a Rust-vs-Python cost comparison would have produced numbers that
   looked authoritative and meant nothing. Wrote `src/agent/metrics.rs` (Meter,
   TurnMetrics, pricing table), 12 tests green, 120 Rust total. The parity test
   deliberately uses values **captured from actually running `pricing.py`** rather
@@ -1593,21 +1593,21 @@ without mentioning it. Finished, but did not reach the goal.
   plan. Cost: zero API.
   **Next:** thread the Meter through the turn, then `--once`.
 
-- **2026-08-24, iteration 12** — `bench-python/` split out as a standalone
+- **2026-08-24, iteration 12**: `bench-python/` split out as a standalone
   project. Both suites green from the new location (`bench` 17 scenarios /
   `versus` 5, sanity clean), reports render, and the baseline versus logs moved
   with it so the V1-V5 evidence is still there. The one design decision worth
   recording: the harness *locates* the agent package rather than vendoring it,
   via `axium_path.py` (env var → `../python` → importable). Vendoring would have
   been simpler and would have meant silently benchmarking a stale copy the first
-  time the agent changed — which is the exact failure this whole plan exists to
+  time the agent changed, which is the exact failure this whole plan exists to
   measure. Removed the originals only after `diff -rq` showed the copies matched
   except for the three path bootstraps I had patched. Root `README.md` fixed: it
   told the reader to `cd python`, which no longer has a bench in it.
   Cost: zero API (sanity runs make no calls).
   **Next:** `bench-rust/`, the larger half of this phase.
 
-- **2026-08-24, iteration 11** — **Phase 2 closed.** Clippy 80 warnings → 0,
+- **2026-08-24, iteration 11**: **Phase 2 closed.** Clippy 80 warnings → 0,
   build warnings → 0, 108 Rust + 34 Python tests green, release binary starts
   clean. The box looked like tidying and was not: clippy's seven "stripping a
   prefix manually" hits were seven copy-pasted tilde-expansion blocks that had
@@ -1617,18 +1617,18 @@ without mentioning it. Finished, but did not reach the goal.
   said "clean" rather than "mostly clean". Consolidated into one
   `expand_home()` with a test asserting the two forms agree. Where clippy was
   wrong I used a scoped `#[allow]` with the reason rather than reshaping correct
-  code — the heartbeat chain's four `true` branches each document a distinct
+  code, the heartbeat chain's four `true` branches each document a distinct
   reason a turn was accepted, and collapsing them would have deleted that.
   Cost: zero API.
   **Next:** Phase 3, the two standalone benchmark projects. First box is
   `bench-python/`.
 
-- **2026-08-24, iteration 10** — the seven settings landed and, more importantly,
+- **2026-08-24, iteration 10**: the seven settings landed and, more importantly,
   the subsystems are now actually constructed: `DurableContext::new()` builds them
   once per session from config, and all four channels consume it. 106 Rust + 34
   Python tests green; the release binary starts clean against the new example
   config. Three judgement calls worth recording. (1) The handles live on
-  `AppState`, not `TurnConfig` — the fact store would survive either way, but the
+  `AppState`, not `TurnConfig`: the fact store would survive either way, but the
   checkpoint stack and trace are in-memory, so per-turn construction would mean
   `undo_turn` never reaches past the current turn and no session ever accumulates
   enough trace to distil. (2) `worker.rs` shares the fact store but gets its own
@@ -1639,29 +1639,29 @@ without mentioning it. Finished, but did not reach the goal.
   binary silently breaks every existing install. `distill_skills` is the lone
   default-off flag: it writes files that are then selected by name forever.
   Cost: zero API.
-  **Next:** the last Phase 2 box — `cargo build --release` and `cargo clippy`
+  **Next:** the last Phase 2 box, `cargo build --release` and `cargo clippy`
   clean. Note the pre-existing clippy backlog is real (35 lints in `tui/server.rs`,
   25 in `router.rs`), so that box is larger than it looks.
 
-- **2026-08-24, iteration 9** — the Rust router wiring landed: Brain preload,
+- **2026-08-24, iteration 9**: the Rust router wiring landed: Brain preload,
   `[FACTS]`, grounded planner, per-turn checkpoints, and an `after_turn()` pass
   doing fact extraction, journalling, trajectory recording, skill distillation and
   failure mining. 100 Rust + 34 Python tests green. Two genuine bugs found, both
   about prompt caching rather than logic. First, skills were being folded into the
-  soul — above the cache breakpoint — even though they are selected per message,
+  soul, above the cache breakpoint, even though they are selected per message,
   so any turn that picked a different skill invalidated the whole cached prefix.
   Second, and only because a test was written specifically to assert the split
   point: with a Brain block present the prompt ended with **one** newline before
   `[MEMORY]`, where `sonnet.rs` matches `"\n\n[MEMORY]\n"` literally. That is the
-  worst kind of bug — the prompt still reads correctly, it just quietly costs full
+  worst kind of bug: the prompt still reads correctly, it just quietly costs full
   price on every request forever. The marker is now a named constant joined onto a
   trimmed head so it cannot drift again. Removed the transitional dead-code allows
   from all five new modules; what remains dead is the constructors, which the next
   box wires. Cost: zero API.
-  **Next:** `src/config/loader.rs` — the seven settings, which also turns the
+  **Next:** `src/config/loader.rs`, the seven settings, which also turns the
   subsystems on for real.
 
-- **2026-08-24, iteration 8** — the four new tools and the snapshot hooks landed,
+- **2026-08-24, iteration 8**: the four new tools and the snapshot hooks landed,
   11 tests green. Suites now 91 Rust + 34 Python, clippy still clean on every
   touched file. Two things worth recording. First, the box was written as
   "`src/tools/`" but this build keeps all tool schemas in `sonnet.rs` and all
@@ -1670,15 +1670,15 @@ without mentioning it. Finished, but did not reach the goal.
   the box text. Second, `snapshot()` was first written to take `&TurnConfig` and
   read one field from it, which made it untestable without building ~35 fields
   including an HTTP client and a live SQLite handle. Narrowed it to
-  `Option<&Arc<Mutex<Checkpoints>>>` and it became trivially testable — the
+  `Option<&Arc<Mutex<Checkpoints>>>` and it became trivially testable: the
   compiler was pointing at a design problem, not an inconvenience. Added
   cross-build parity tests (same four tool names, same minimal-set membership,
   unique names, well-formed schemas) and verified the same holds in Python, since
   a silent divergence there would make the two benchmarks incomparable.
   Cost: zero API.
-  **Next:** `src/agent/router.rs` wiring — the largest remaining box.
+  **Next:** `src/agent/router.rs` wiring, the largest remaining box.
 
-- **2026-08-24, iteration 7** — `src/agent/classifier.rs` extended with the four
+- **2026-08-24, iteration 7**: `src/agent/classifier.rs` extended with the four
   cheap-model passes. Suites now 80 Rust + 34 Python, and clippy reports **zero**
   warnings across all six touched Rust files. First box in this phase that
   modified existing code, so the diff was kept deliberately narrow: the four new
@@ -1689,9 +1689,9 @@ without mentioning it. Finished, but did not reach the goal.
   dead-code allow on the four new methods rather than a file-level one, which
   would have masked real dead code in a 1000-line pre-existing file.
   Cost: zero API.
-  **Next:** `src/tools/` — the four new tools and the snapshot hooks.
+  **Next:** `src/tools/`, the four new tools and the snapshot hooks.
 
-- **2026-08-24, iteration 6** — `src/agent/trajectory.rs` written, 16 tests
+- **2026-08-24, iteration 6**: `src/agent/trajectory.rs` written, 16 tests
   green first run. Suites now 74 Rust + 34 Python; all five new Rust modules are
   clippy-clean. Found one more hardening gap in the **Python** original:
   `write_skill` trusted the caller's name and joined it straight onto the skills
@@ -1702,10 +1702,10 @@ without mentioning it. Finished, but did not reach the goal.
   Noted a deliberate structural difference: Rust puts `mine_failure` in
   `memory/facts.rs` next to the fact type it produces, where Python has it in
   `trajectory.py`. Same behaviour, tested on both sides. Cost: zero API.
-  **Next:** `src/agent/classifier.rs` — the first box in this phase that touches
+  **Next:** `src/agent/classifier.rs`, the first box in this phase that touches
   existing code rather than adding a new file.
 
-- **2026-08-24, iteration 5** — `src/agent/planner.rs` written, 14 tests green.
+- **2026-08-24, iteration 5**: `src/agent/planner.rs` written, 14 tests green.
   Suites now 58 Rust + 32 Python. Writing the Rust tests exposed three defects in
   the **Python** planner, one of them ugly: step counting accepted any line
   starting with up to two leading characters that looked numeric, so a pasted
@@ -1718,7 +1718,7 @@ without mentioning it. Finished, but did not reach the goal.
   as a second review pass over the Python original. Cost: zero API.
   **Next:** `src/agent/trajectory.rs`.
 
-- **2026-08-24, iteration 4** — `src/agent/checkpoints.rs` written, 17 tests
+- **2026-08-24, iteration 4**: `src/agent/checkpoints.rs` written, 17 tests
   green first run. Suites now 44 Rust + 28 Python. Writing the Rust version
   surfaced a defect in the **Python** one that its own tests had not: checkpoint
   ids came from the millisecond clock alone, so two checkpoints opened in the
@@ -1729,7 +1729,7 @@ without mentioning it. Finished, but did not reach the goal.
   Cost: zero API.
   **Next:** `src/agent/planner.rs`.
 
-- **2026-08-24, iteration 3** — `src/agent/brain.rs` written, 13 tests green;
+- **2026-08-24, iteration 3**: `src/agent/brain.rs` written, 13 tests green;
   full suites now 27 Rust + 25 Python, all passing. One test found a **real
   defect that was in both implementations**: the change fingerprint used
   `(size, mtime-in-seconds)`, so a same-size edit made within the same second as
@@ -1741,7 +1741,7 @@ without mentioning it. Finished, but did not reach the goal.
   once when the other build first touches it. Cost: zero API.
   **Next:** `src/agent/checkpoints.rs`.
 
-- **2026-08-24, iteration 2** — `src/memory/facts.rs` written, 14 tests green.
+- **2026-08-24, iteration 2**: `src/memory/facts.rs` written, 14 tests green.
   Most of the iteration went on an environment problem worth recording: the Rust
   toolchain here could not actually compile anything, and the earlier clean
   `cargo build --release` was a cache artefact, not a working build. Installed
@@ -1755,7 +1755,7 @@ without mentioning it. Finished, but did not reach the goal.
   Cost: zero API, ~275MB download.
   **Next:** `src/agent/brain.rs`.
 
-- **2026-08-24, iteration 1** — Phase 1 closed. `router.py` wired: Brain preload,
+- **2026-08-24, iteration 1**: Phase 1 closed. `router.py` wired: Brain preload,
   the `[FACTS]` block, skills selection, the grounded planner, per-turn
   checkpoints, and an `_after_turn()` learning pass (fact extraction, journal,
   trajectory, failure mining, optional skill distillation). Sub-agents share the
@@ -1767,7 +1767,7 @@ without mentioning it. Finished, but did not reach the goal.
   zero API cost. `python -m axium --check` still clean and now prints the active
   durable-context flags. **Next:** Phase 2, `src/memory/facts.rs`.
 
-- **2026-08-24** — Diagnosis complete against the 3-rep versus logs. V3 and V4
+- **2026-08-24**: Diagnosis complete against the 3-rep versus logs. V3 and V4
   identified as the only real losses; everything else is a tie. Phase 1 modules
   written: `facts.py`, `brain.py`, `checkpoints.py`, `skills.py`,
   `trajectory.py`, `planner.py`, plus the `config.py`, `classifier.py`,

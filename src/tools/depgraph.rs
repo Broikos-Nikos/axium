@@ -13,7 +13,7 @@ pub fn get_dependency_graph(path: &str, direction: &str, working_dir: &str) -> S
     // Find Cargo.toml root
     let cargo_root = match find_cargo_root(&target) {
         Some(r) => r,
-        None => return "No Cargo.toml found — not a Rust project.".to_string(),
+        None => return "No Cargo.toml found, not a Rust project.".to_string(),
     };
 
     let src_dir = cargo_root.join("src");
@@ -97,7 +97,7 @@ fn build_import_map(src_dir: &Path) -> HashMap<PathBuf, Vec<PathBuf>> {
                 let end = rest.find([';', ' ', '\n'])
                     .unwrap_or(rest.len());
                 let seg = &rest[..end];
-                // Strip trailing ::{...} group imports — take up to the last :: before {
+                // Strip trailing ::{...} group imports, take up to the last :: before {
                 seg.split("::").filter(|s| !s.starts_with('{') && s.chars().all(|c| c.is_alphanumeric() || c == '_'))
                     .collect::<Vec<_>>()
                     .join("/")
