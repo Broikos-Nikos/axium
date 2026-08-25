@@ -34,14 +34,7 @@ pub fn spawn_worker(state: Arc<AppState>) {
 
 /// Resolve the tasks/ directory path from the config working directory.
 fn tasks_dir(working_dir: &str) -> PathBuf {
-    let base = if working_dir.is_empty() || working_dir == "~" {
-        std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
-    } else if working_dir.starts_with("~/") {
-        let home = std::env::var("HOME").unwrap_or_default();
-        format!("{}/{}", home, &working_dir[2..])
-    } else {
-        working_dir.to_string()
-    };
+    let base = crate::config::loader::expand_home(working_dir);
     PathBuf::from(base).join("tasks")
 }
 
@@ -178,29 +171,50 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
     let (status, result) = {
         let cfg = state.config.read().await;
         let sonnet = SonnetClient::new(
-            &cfg.api_keys.anthropic,
-            &cfg.api_keys.openai,
+            &cfg.api_keys.as_set(),
             &cfg.models.primary,
             &cfg.models.primary_provider,
             cfg.settings.max_tokens,
             Arc::clone(&state.http),
         );
         let compactor = Compactor::new(
-            &cfg.api_keys.anthropic,
-            &cfg.api_keys.openai,
+            &cfg.api_keys.as_set(),
             &cfg.models.compactor,
             &cfg.models.compactor_provider,
             Arc::clone(&state.http),
         );
         let classifier = Classifier::new(
-            &cfg.api_keys.anthropic,
-            &cfg.api_keys.openai,
+            &cfg.api_keys.as_set(),
             &cfg.models.classifier,
             &cfg.models.classifier_provider,
             Arc::clone(&state.http),
         );
 
+        // A background task shares the FACT store (durable, project-scoped
+        // knowledge is the same knowledge) but gets its OWN checkpoint stack and
+        // trace. Sharing those would let the user's `undo_turn` in the
+        // interactive session revert a background task's work, and vice versa.
+        let worker_checkpoints = if cfg.settings.checkpoints_enabled {
+            Some(Arc::new(std::sync::Mutex::new(
+                crate::agent::checkpoints::Checkpoints::new(&cfg.settings.working_directory),
+            )))
+        } else {
+            None
+        };
+        let worker_trajectory = Some(Arc::new(std::sync::Mutex::new(
+            crate::agent::trajectory::Trajectory::new(""),
+        )));
+
         let turn_cfg = TurnConfig {
+            // Interactive turns do not pay for benchmark bookkeeping.
+            meter: None,
+            facts: state.durable.facts.clone(),
+            checkpoints: worker_checkpoints,
+            trajectory: worker_trajectory,
+            brain_enabled: cfg.settings.brain_enabled,
+            planner_enabled: cfg.settings.planner_enabled,
+            distill_skills: cfg.settings.distill_skills,
+            skills_dir: cfg.settings.skills_dir.clone(),
             token_limit: cfg.settings.token_limit,
             terminal_timeout: cfg.settings.terminal_timeout_secs,
             max_output_chars: cfg.settings.max_output_chars,
@@ -209,8 +223,7 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
             sudo_password: String::new(),
             working_directory: cfg.settings.working_directory.clone(),
             conversation_logging: false,
-            anthropic_key: cfg.api_keys.anthropic.clone(),
-            openai_key: cfg.api_keys.openai.clone(),
+            keys: cfg.api_keys.as_set(),
             primary_model: cfg.models.primary.clone(),
             primary_provider: cfg.models.primary_provider.clone(),
             http: Arc::clone(&state.http),
@@ -241,15 +254,8 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
 
         let soul = crate::config::loader::load_soul(&cfg.agent.soul);
         let raw_wd = &cfg.settings.working_directory;
-        let working_dir = if raw_wd.is_empty() || raw_wd == "~" {
-            std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
-        } else if raw_wd.starts_with("~/") {
-            let home = std::env::var("HOME").unwrap_or_default();
-            format!("{}/{}", home, &raw_wd[2..])
-        } else {
-            raw_wd.clone()
-        };
-        let project_ctx = crate::tui::server::get_project_context(&state, &working_dir).await;
+        let working_dir = crate::config::loader::expand_home(raw_wd);
+        let project_ctx = crate::tui::server::get_project_context(state, &working_dir).await;
         let tdir = tasks_dir(raw_wd);
 
         // Determine previous failure reason (stored in result if retrying)
@@ -426,7 +432,7 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
     if let Err(e) = state.task_db.save_task_result(task.id, &result, &status) {
         warn!(id = task.id, error = %e, "Failed to save task result — resetting to pending");
         let _ = state.task_db.update_task_status(task.id, "pending");
-        return Err(e.into());
+        return Err(e);
     }
 
     info!(id = task.id, status = %status, "Background task complete");
@@ -438,7 +444,9 @@ async fn run_next_task(state: &Arc<AppState>) -> anyhow::Result<()> {
             "task_id": task.id,
             "title": task.title,
             "status": status,
-            "result": if result.len() > 1000 { &result[..1000] } else { &result },
+            // Char-based: byte-slicing panics on any tool output whose 1000th
+            // byte lands inside a multibyte character. Same bug as router.rs.
+            "result": crate::agent::router::truncate_for_report(&result, 1000),
         })).await;
     }
 

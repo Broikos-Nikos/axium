@@ -242,7 +242,7 @@ pub async fn web_search(query: &str, http: &reqwest::Client) -> Result<String> {
 }
 
 /// Extract text between a start marker and an end marker.
-fn extract_between<'a>(html: &'a str, start: &str, end: &str) -> Option<String> {
+fn extract_between(html: &str, start: &str, end: &str) -> Option<String> {
     let start_idx = html.find(start)?;
     let after_start = &html[start_idx + start.len()..];
     // Skip past the closing > of the opening tag

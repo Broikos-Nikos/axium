@@ -45,6 +45,9 @@ pub struct AppState {
     pub flush_notify: Arc<tokio::sync::Notify>,
     /// In-flight task file contents keyed by task_id → (absolute path, current file content).
     pub task_file_buffers: Arc<RwLock<std::collections::HashMap<i64, (std::path::PathBuf, String)>>>,
+    /// Fact store, checkpoint stack and session trace. Session-scoped: the last
+    /// two hold in-memory state that must outlive a single turn.
+    pub durable: crate::agent::router::DurableContext,
 }
 
 /// Get project context, using the cached value if still valid (< 60s and same working_dir),
@@ -137,6 +140,7 @@ async fn get_config(
         "available_models": cfg.available_models,
         "has_anthropic_key": !cfg.api_keys.anthropic.is_empty(),
         "has_openai_key": !cfg.api_keys.openai.is_empty(),
+        "has_deepseek_key": !cfg.api_keys.deepseek.is_empty(),
         "has_sudo_password": has_sudo,
         "settings": {
             "max_output_chars": cfg.settings.max_output_chars,
@@ -188,6 +192,11 @@ async fn set_config(
     if let Some(key) = body["anthropic_key"].as_str() {
         if !key.is_empty() {
             cfg.api_keys.anthropic = key.to_string();
+        }
+    }
+    if let Some(key) = body["deepseek_key"].as_str() {
+        if !key.is_empty() && !key.starts_with("sk-...") {
+            cfg.api_keys.deepseek = key.to_string();
         }
     }
     if let Some(key) = body["openai_key"].as_str() {
@@ -467,7 +476,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         "session_id": session_id,
         "session_title": session_title,
     });
-    let _ = ws_tx.send(WsMessage::Text(greeting.to_string().into())).await;
+    let _ = ws_tx.send(WsMessage::Text(greeting.to_string())).await;
 
     // Send session history to client for reconnection
     for m in &history {
@@ -475,7 +484,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             "type": if m.role == "user" { "history_user" } else { "history_assistant" },
             "text": m.content,
         });
-        if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+        if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
             return;
         }
     }
@@ -490,7 +499,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 "status": task.status,
                 "result": if task.result.len() > 500 { let mut b=500; while b>0 && !task.result.is_char_boundary(b) { b-=1; } format!("{}…", &task.result[..b]) } else { task.result.clone() },
             });
-            let _ = ws_tx.send(WsMessage::Text(m.to_string().into())).await;
+            let _ = ws_tx.send(WsMessage::Text(m.to_string())).await;
             let _ = state.task_db.mark_read(task.id);
         }
     }
@@ -509,7 +518,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         let incoming: serde_json::Value = if let Some(auto_text) = pending_auto.take() {
             auto_turn_count += 1;
             let _ = ws_tx.send(WsMessage::Text(
-                serde_json::json!({"type": "autonomous_turn", "turn": auto_turn_count}).to_string().into()
+                serde_json::json!({"type": "autonomous_turn", "turn": auto_turn_count}).to_string()
             )).await;
             serde_json::json!({"type": "message", "text": auto_text})
         } else {
@@ -526,7 +535,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     let _ = state.chat_db.save_message(&session_id, "system", &text);
                                 }
                             }
-                            let _ = ws_tx.send(WsMessage::Text(bcast.into())).await;
+                            let _ = ws_tx.send(WsMessage::Text(bcast)).await;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             warn!("Broadcast receiver lagged, skipped {} messages", n);
@@ -536,7 +545,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     continue;
                 }
                 _ = ping_interval.tick() => {
-                    if ws_tx.send(WsMessage::Ping(Vec::new().into())).await.is_err() {
+                    if ws_tx.send(WsMessage::Ping(Vec::new())).await.is_err() {
                         break;
                     }
                     continue;
@@ -576,35 +585,25 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     user_text
                 };
                 let wd = &cfg.settings.working_directory;
-                let resolved_wd = if wd.is_empty() || wd == "~" {
-                    std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
-                } else if wd.starts_with("~/") {
-                    let home = std::env::var("HOME").unwrap_or_default();
-                    format!("{}/{}", home, &wd[2..])
-                } else {
-                    wd.clone()
-                };
+                let resolved_wd = crate::config::loader::expand_home(wd);
                 let ctx = get_project_context(&state, &resolved_wd).await;
                 (
                     user_text,
                     SonnetClient::new(
-                        &cfg.api_keys.anthropic,
-                        &cfg.api_keys.openai,
+                        &cfg.api_keys.as_set(),
                         &cfg.models.primary,
                         &cfg.models.primary_provider,
                         cfg.settings.max_tokens,
                         Arc::clone(&state.http),
                     ),
                     Compactor::new(
-                        &cfg.api_keys.anthropic,
-                        &cfg.api_keys.openai,
+                        &cfg.api_keys.as_set(),
                         &cfg.models.compactor,
                         &cfg.models.compactor_provider,
                         Arc::clone(&state.http),
                     ),
                     Classifier::new(
-                        &cfg.api_keys.anthropic,
-                        &cfg.api_keys.openai,
+                        &cfg.api_keys.as_set(),
                         &cfg.models.classifier,
                         &cfg.models.classifier_provider,
                         Arc::clone(&state.http),
@@ -612,6 +611,15 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     state.memory_path.clone(),
                     crate::config::loader::load_soul(&cfg.agent.soul),
                     TurnConfig {
+                    // Interactive turns do not pay for benchmark bookkeeping.
+                    meter: None,
+                    facts: state.durable.facts.clone(),
+                    checkpoints: state.durable.checkpoints.clone(),
+                    trajectory: state.durable.trajectory.clone(),
+                    brain_enabled: cfg.settings.brain_enabled,
+                    planner_enabled: cfg.settings.planner_enabled,
+                    distill_skills: cfg.settings.distill_skills,
+                    skills_dir: cfg.settings.skills_dir.clone(),
                         token_limit: cfg.settings.token_limit,
                         terminal_timeout: cfg.settings.terminal_timeout_secs,
                         max_output_chars: cfg.settings.max_output_chars,
@@ -627,8 +635,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         telegram_bot_token: cfg.settings.telegram_bot_token.clone(),
                         conversation_logging: cfg.settings.conversation_logging,
                         http: Arc::clone(&state.http),
-                        anthropic_key: cfg.api_keys.anthropic.clone(),
-                        openai_key: cfg.api_keys.openai.clone(),
+                        keys: cfg.api_keys.as_set(),
                         primary_model: cfg.models.primary.clone(),
                         primary_provider: cfg.models.primary_provider.clone(),
                         subagent_depth: 0,
@@ -803,7 +810,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "type": "text_delta",
                                     "text": chunk,
                                 });
-                                if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                                if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                                     // Connection lost — save partial text and abort agent
                                     if !partial_text.is_empty() {
                                         info!("DB save [assistant/partial] from TextDelta disconnect handler");
@@ -821,7 +828,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "type": "assistant",
                                     "text": text,
                                 });
-                                if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                                if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                                     return;
                                 }
                             }
@@ -830,7 +837,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "type": "plan",
                                     "text": plan,
                                 });
-                                if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                                if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                                     return;
                                 }
                             }
@@ -845,7 +852,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "name": name,
                                     "input": input,
                                 });
-                                if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                                if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                                     return;
                                 }
                             }
@@ -857,7 +864,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "stderr": crate::agent::router::strip_ansi(&stderr),
                                     "code": code,
                                 });
-                                if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                                if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                                     return;
                                 }
                             }
@@ -867,7 +874,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "section": section,
                                     "content": content,
                                 });
-                                if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                                if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                                     return;
                                 }
                             }
@@ -884,7 +891,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "caption": caption,
                                     "url": format!("/api/files?path={}", urlencoded(&path)),
                                 });
-                                if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                                if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                                     return;
                                 }
                             }
@@ -900,7 +907,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "type": "ask_user",
                                     "text": question,
                                 });
-                                if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                                if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                                     return;
                                 }
                                 pending_ask = Some(reply_tx);
@@ -911,7 +918,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "class": class,
                                     "detail": detail,
                                 });
-                                if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                                if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                                     return;
                                 }
                             }
@@ -930,7 +937,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "type": "trivial_answer",
                                     "text": answer,
                                 });
-                                if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                                if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                                     return;
                                 }
                             }
@@ -948,13 +955,13 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "type": "error",
                                     "text": e,
                                 });
-                                if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                                if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                                     return;
                                 }
                             }
                             Some(AgentEvent::ModelUsed(model)) => {
                                 let msg = serde_json::json!({"type": "model_used", "model": model});
-                                if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                                if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                                     return;
                                 }
                             }
@@ -965,11 +972,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     pending_auto = None;
                                 }
                                 let msg = serde_json::json!({"type": "autonomous_mode", "enabled": enabled});
-                                let _ = ws_tx.send(WsMessage::Text(msg.to_string().into())).await;
+                                let _ = ws_tx.send(WsMessage::Text(msg.to_string())).await;
                             }
                             Some(AgentEvent::TaskQueued { id, title }) => {
                                 let msg = serde_json::json!({"type": "task_queued", "id": id, "title": title});
-                                let _ = ws_tx.send(WsMessage::Text(msg.to_string().into())).await;
+                                let _ = ws_tx.send(WsMessage::Text(msg.to_string())).await;
                             }
                             Some(AgentEvent::TokenUsage { input, output, cache_read, cache_write, model }) => {
                                 let msg = serde_json::json!({
@@ -980,14 +987,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     "cache_write": cache_write,
                                     "model": model,
                                 });
-                                let _ = ws_tx.send(WsMessage::Text(msg.to_string().into())).await;
+                                let _ = ws_tx.send(WsMessage::Text(msg.to_string())).await;
                             }
                             Some(AgentEvent::Retry) => {
                                 // Heartbeat decided the response was incomplete.
                                 // Discard streamed text that the UI already rendered and start fresh.
                                 partial_text.clear();
                                 let msg = serde_json::json!({"type": "retry"});
-                                if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                                if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                                     return;
                                 }
                             }
@@ -1052,7 +1059,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     }
                                 }
                                 let _ = ws_tx.send(WsMessage::Text(
-                                    serde_json::json!({"type": "done"}).to_string().into()
+                                    serde_json::json!({"type": "done"}).to_string()
                                 )).await;
 
                                 // Conversation recovery: periodically clean up correction noise
@@ -1112,8 +1119,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                                                 "type": "recovery",
                                                                 "removed": removed,
                                                             })
-                                                            .to_string()
-                                                            .into(),
+                                                            .to_string(),
                                                         ))
                                                         .await;
                                                     recovery_window_start = history.len();
@@ -1142,7 +1148,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                         auto_mode = false;
                                         auto_turn_count = 0;
                                         let _ = ws_tx.send(WsMessage::Text(
-                                            serde_json::json!({"type": "autonomous_done", "message": "Autonomous mode reached maximum turns."}).to_string().into()
+                                            serde_json::json!({"type": "autonomous_done", "message": "Autonomous mode reached maximum turns."}).to_string()
                                         )).await;
                                     }
                                 }
@@ -1171,10 +1177,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     pending_auto = None;
                                 }
                                 let _ = ws_tx.send(WsMessage::Text(
-                                    serde_json::json!({"type":"cancelled"}).to_string().into()
+                                    serde_json::json!({"type":"cancelled"}).to_string()
                                 )).await;
                                 let _ = ws_tx.send(WsMessage::Text(
-                                    serde_json::json!({"type":"done"}).to_string().into()
+                                    serde_json::json!({"type":"done"}).to_string()
                                 )).await;
                                 break;
                             }
@@ -1194,10 +1200,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     _ = &mut agent_timeout => {
                         abort_handle.abort();
                         let _ = ws_tx.send(WsMessage::Text(
-                            serde_json::json!({"type":"error","text":"Agent turn timed out after 10 minutes."}).to_string().into()
+                            serde_json::json!({"type":"error","text":"Agent turn timed out after 10 minutes."}).to_string()
                         )).await;
                         let _ = ws_tx.send(WsMessage::Text(
-                            serde_json::json!({"type":"done"}).to_string().into()
+                            serde_json::json!({"type":"done"}).to_string()
                         )).await;
                         break;
                     }
@@ -1209,7 +1215,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             // Skip Telegram sessions — they keep their permanent "Telegram" title.
             let db_msg_count = state.chat_db.message_count(&session_id);
             let no_title = state.chat_db.get_session_title(&session_id).is_empty();
-            if !session_id.starts_with("telegram_") && db_msg_count >= 10 && (no_title || db_msg_count % 10 == 0) {
+            if !session_id.starts_with("telegram_") && db_msg_count >= 10 && (no_title || db_msg_count.is_multiple_of(10)) {
                 let snippet: Vec<(String, String)> = history.iter()
                     .take(10)
                     .map(|m| (m.role.clone(), m.content.chars().take(150).collect()))
@@ -1256,7 +1262,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 "text": format!("New session started: {}", session_id),
                 "session_id": session_id,
             });
-            let _ = ws_tx.send(WsMessage::Text(msg.to_string().into())).await;
+            let _ = ws_tx.send(WsMessage::Text(msg.to_string())).await;
         } else if incoming["type"] == "switch_session" {
             let target_id = incoming["session_id"].as_str().unwrap_or("").to_string();
             if !target_id.is_empty() {
@@ -1286,7 +1292,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     "session_id": target_id,
                     "session_title": stored_title,
                 });
-                let _ = ws_tx.send(WsMessage::Text(sys_msg.to_string().into())).await;
+                let _ = ws_tx.send(WsMessage::Text(sys_msg.to_string())).await;
 
                 // Replay session history
                 for m in &history {
@@ -1294,7 +1300,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         "type": if m.role == "user" { "history_user" } else { "history_assistant" },
                         "text": m.content,
                     });
-                    if ws_tx.send(WsMessage::Text(msg.to_string().into())).await.is_err() {
+                    if ws_tx.send(WsMessage::Text(msg.to_string())).await.is_err() {
                         return;
                     }
                 }

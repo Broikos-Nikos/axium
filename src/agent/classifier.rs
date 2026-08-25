@@ -2,7 +2,42 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use super::{resolve_provider, Provider};
+use super::{planner, resolve_provider, trajectory, ApiKeySet, Provider};
+use crate::memory::facts;
+
+/// Pull the assistant text out of a raw provider response.
+///
+/// Falls back to "SIMPLE" rather than erroring: an unparseable classifier reply
+/// should route conservatively, not kill the turn.
+fn extract_text(v: &serde_json::Value, provider: Provider) -> String {
+    let slot = match provider {
+        Provider::Anthropic => &v["content"][0]["text"],
+        _ => &v["choices"][0]["message"]["content"],
+    };
+    slot.as_str().unwrap_or("SIMPLE").to_string()
+}
+
+/// First `max` chars. Char-based, not byte-based: `&s[..600]` panics the moment a
+/// user writes Greek, and the existing call sites in this file each hand-roll a
+/// `is_char_boundary` walk to avoid it.
+fn truncate_head(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        s.chars().take(max).collect()
+    }
+}
+
+/// Last `max` chars — the tail of an agent reply is the part that says what
+/// happened, so a long reply is trimmed from the front.
+fn truncate_tail(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n <= max {
+        s.to_string()
+    } else {
+        s.chars().skip(n - max).collect()
+    }
+}
 
 /// Classification result from the cheap model.
 #[derive(Debug, Clone)]
@@ -26,34 +61,51 @@ struct ScoreResult {
 
 #[derive(Clone)]
 pub struct Classifier {
-    anthropic_key: String,
-    openai_key: String,
+    keys: ApiKeySet,
     model: String,
     provider: Provider,
     http: Arc<reqwest::Client>,
+    /// Where this classifier's calls are billed. `None` outside a metered
+    /// turn — every cheap pass in this file bills through it, which is what
+    /// makes the per-role cost split able to prove cheap routing pays off.
+    meter: Option<crate::agent::metrics::MeterHandle>,
 }
 
 impl Classifier {
     pub fn new(
-        anthropic_key: &str,
-        openai_key: &str,
+        keys: &ApiKeySet,
         model: &str,
         explicit_provider: &str,
         http: Arc<reqwest::Client>,
     ) -> Self {
         let provider = resolve_provider(model, explicit_provider);
         Self {
-            anthropic_key: anthropic_key.to_string(),
-            openai_key: openai_key.to_string(),
+            keys: keys.clone(),
             model: model.to_string(),
             provider,
             http,
+            meter: None,
         }
+    }
+
+    /// Bill this classifier's calls to `meter`.
+    pub fn with_meter(mut self, meter: Option<crate::agent::metrics::MeterHandle>) -> Self {
+        self.meter = meter;
+        self
     }
 
     /// Classify and optionally enhance a user prompt.
     /// Returns the classification with any direct answer or enhanced prompt.
-    pub async fn classify(&self, user_message: &str) -> Result<PromptClass> {
+    /// Route one prompt.
+    ///
+    /// `facts_block` is the same `[FACTS]` text the agent gets. It matters
+    /// because the TRIVIAL path answers from HERE and never reaches the agent,
+    /// so without it a question about something the user stated two turns ago
+    /// ("what is our free-shipping threshold?") is classified trivial and
+    /// answered "I don't have that information" by a model that was never shown
+    /// the fact. Caught by bench scenario M1: the fact was stored correctly and
+    /// the routing walked straight past it.
+    pub async fn classify(&self, user_message: &str, facts_block: &str) -> Result<PromptClass> {
         // Fast-path: skip LLM call for patterns we can classify with certainty.
         if let Some(class) = quick_classify(user_message) {
             info!(classification_raw = "QUICK", "Classifier: fast-path match");
@@ -108,8 +160,18 @@ Response: COMPLEX: Compare LAMP and XAMPP for local development on this system a
 
 Respond with ONLY the classification line. No explanations."#;
 
+        let system = if facts_block.is_empty() {
+            system.to_string()
+        } else {
+            format!(
+                "{system}\n\n[STANDING FACTS]\nRules and decisions from earlier in \
+                 this session. If the user is asking about something stated here, \
+                 answer it as TRIVIAL using the fact VERBATIM, including any number. \
+                 Never say you lack information that appears below.\n{facts_block}"
+            )
+        };
         let prompt = format!("User message: {}", user_message);
-        let response = self.call_llm(system, &prompt, 256).await?;
+        let response = self.call_llm(&system, &prompt, 256).await?;
         let response = response.trim();
 
         info!(classification_raw = %response, "Classifier response");
@@ -129,13 +191,54 @@ Respond with ONLY the classification line. No explanations."#;
     }
 
     async fn call_llm(&self, system: &str, prompt: &str, max_tokens: usize) -> Result<String> {
-        match self.provider {
-            Provider::OpenAI => self.call_openai(system, prompt, max_tokens).await,
-            Provider::Anthropic => self.call_anthropic(system, prompt, max_tokens).await,
+        self.call_llm_as("classifier", system, prompt, max_tokens).await
+    }
+
+    /// Every cheap pass in this file goes through here, so metering is structural
+    /// rather than something each new pass has to remember to add.
+    async fn call_llm_as(
+        &self,
+        role: &str,
+        system: &str,
+        prompt: &str,
+        max_tokens: usize,
+    ) -> Result<String> {
+        let started = std::time::Instant::now();
+        let raw = match self.provider {
+            Provider::Anthropic => self.call_anthropic_raw(system, prompt, max_tokens).await,
+            // OpenAI and DeepSeek share the chat-completions shape.
+            _ => self.call_openai_compatible_raw(system, prompt, max_tokens).await,
+        };
+        let latency = started.elapsed().as_secs_f64();
+        match raw {
+            Ok(v) => {
+                crate::agent::metrics::record(
+                    self.meter.as_ref(),
+                    role,
+                    &self.model,
+                    crate::agent::metrics::usage_from_response(&v),
+                    latency,
+                    None,
+                );
+                Ok(extract_text(&v, self.provider))
+            }
+            Err(e) => {
+                crate::agent::metrics::record(
+                    self.meter.as_ref(),
+                    role,
+                    &self.model,
+                    crate::agent::metrics::Usage::default(),
+                    latency,
+                    Some(e.to_string()),
+                );
+                Err(e)
+            }
         }
     }
 
-    async fn call_openai(&self, system: &str, prompt: &str, max_tokens: usize) -> Result<String> {
+    async fn call_openai_compatible_raw(&self, system: &str, prompt: &str, max_tokens: usize) -> Result<serde_json::Value> {
+        let base = self.provider.base_url()
+            .ok_or_else(|| anyhow::anyhow!("provider has no OpenAI-compatible endpoint"))?;
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -148,29 +251,24 @@ Respond with ONLY the classification line. No explanations."#;
 
         let resp = self
             .http
-            .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.openai_key))
+            .post(format!("{}/chat/completions", base))
+            .header("Authorization", format!("Bearer {}", self.keys.for_provider(self.provider)))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
             .await
-            .context("Failed to reach OpenAI API for classification")?;
+            .with_context(|| format!("Failed to reach {} API for classification", self.provider.as_str()))?;
 
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
-            anyhow::bail!("OpenAI classifier error ({}): {}", status, text);
+            anyhow::bail!("{} classifier error ({}): {}", self.provider.as_str(), status, text);
         }
 
-        let json: serde_json::Value =
-            serde_json::from_str(&text).context("Failed to parse OpenAI classifier response")?;
-        Ok(json["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("SIMPLE")
-            .to_string())
+        serde_json::from_str(&text).context("Failed to parse classifier response")
     }
 
-    async fn call_anthropic(&self, system: &str, prompt: &str, max_tokens: usize) -> Result<String> {
+    async fn call_anthropic_raw(&self, system: &str, prompt: &str, max_tokens: usize) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "model": self.model,
             "max_tokens": max_tokens,
@@ -182,7 +280,7 @@ Respond with ONLY the classification line. No explanations."#;
         let resp = self
             .http
             .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.anthropic_key)
+            .header("x-api-key", &self.keys.anthropic)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&body)
@@ -198,10 +296,7 @@ Respond with ONLY the classification line. No explanations."#;
 
         let json: serde_json::Value =
             serde_json::from_str(&text).context("Failed to parse Anthropic classifier response")?;
-        Ok(json["content"][0]["text"]
-            .as_str()
-            .unwrap_or("SIMPLE")
-            .to_string())
+        Ok(json)
     }
 
     /// Heartbeat check: did the agent complete the user's request?
@@ -221,22 +316,11 @@ Rules:
 
 Respond with EXACTLY one word: COMPLETE or INCOMPLETE"#;
 
-        // Truncate agent text to avoid wasting tokens
-        let text_tail = if agent_text.len() > 600 {
-            let mut b = agent_text.len() - 600;
-            while b < agent_text.len() && !agent_text.is_char_boundary(b) { b += 1; }
-            &agent_text[b..]
-        } else {
-            agent_text
-        };
+        // Truncate agent text to avoid wasting tokens.
+        let text_tail = truncate_tail(agent_text, 600);
+        let prompt = build_review_prompt(user_request, tool_log, &text_tail);
 
-        let prompt = build_review_prompt(
-            user_request,
-            tool_log,
-            text_tail
-        );
-
-        match self.call_llm(system, &prompt, 16).await {
+        match self.call_llm_as("heartbeat", system, &prompt, 16).await {
             Ok(resp) => {
                 let word = resp.trim().to_uppercase();
                 info!(heartbeat = %word, "Heartbeat check result");
@@ -264,16 +348,12 @@ Respond with EXACTLY one word: COMPLETE or INCOMPLETE"#;
             .filter(|(role, _)| role == "user" || role == "assistant")
             .take(6)
             .map(|(role, content)| {
-            let preview = if content.len() > 120 {
-                    let mut b = 120; while b > 0 && !content.is_char_boundary(b) { b -= 1; }
-                    &content[..b]
-                } else { content };
-                format!("[{}]: {}", role, preview)
+                format!("[{}]: {}", role, truncate_head(content, 120))
             })
             .collect::<Vec<_>>()
             .join("\n");
         let prompt = format!("Conversation:\n{}", snippet);
-        match self.call_llm(system, &prompt, 20).await {
+        match self.call_llm_as("title", system, &prompt, 20).await {
             Ok(t) => t.trim().trim_matches('"').trim_matches('\'').to_string(),
             Err(e) => {
                 tracing::warn!(error = %e, "Session title generation failed");
@@ -329,7 +409,7 @@ SKILLS: skill1, skill2"#;
             available, user_message
         );
 
-        let response = self.call_llm(system, &prompt, 128).await?;
+        let response = self.call_llm_as("skills", system, &prompt, 128).await?;
         let response = response.trim();
 
         if response.starts_with("NONE") || !response.starts_with("SKILLS:") {
@@ -388,6 +468,105 @@ SKILLS: skill1, skill2"#;
         }
 
         Ok(result)
+    }
+
+    // ── durable-context passes ──────────────────────────────────────────────
+    // All four run on the cheap model. Each one is optional and fails soft: a
+    // failure in the learning layer must cost a fact, a plan or a journal line,
+    // never the turn that already succeeded.
+
+    /// Pull durable statements out of one turn.
+    ///
+    /// This is the pass that makes a rule stated in turn 1 survive to turn 20:
+    /// nothing here depends on the model having remembered to call a tool. Pass
+    /// `correction = true` when the user turn looks like a correction, which
+    /// floors the importance of whatever comes back — the thing an agent is most
+    /// expensive to forget.
+    pub async fn extract_facts(
+        &self,
+        user_message: &str,
+        agent_text: &str,
+        correction: bool,
+    ) -> Vec<facts::ExtractedFact> {
+        let convo = format!(
+            "USER: {}\n\nAGENT: {}",
+            truncate_head(user_message, 2000),
+            truncate_tail(agent_text, 1500)
+        );
+        let raw = match self.call_llm(facts::EXTRACT_SYSTEM, &convo, 400).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "Fact extraction failed; the turn keeps its result");
+                return Vec::new();
+            }
+        };
+        let mut rows = facts::parse_extraction(&raw);
+        if correction {
+            for r in rows.iter_mut() {
+                r.importance = r.importance.max(facts::CORRECTION_FLOOR);
+            }
+        }
+        if !rows.is_empty() {
+            info!(learned = rows.len(), correction, "Facts extracted from turn");
+        }
+        rows
+    }
+
+    /// A short, brain-grounded plan for a complex task.
+    ///
+    /// Returns "" when the model declined or produced something that would steer
+    /// nothing — an unusable plan still costs tokens on every call of the loop.
+    pub async fn plan(&self, task: &str, brain_context: &str, facts_block: &str) -> String {
+        let prompt = planner::build_prompt(task, brain_context, facts_block);
+        match self
+            .call_llm_as("planner", planner::PLAN_SYSTEM, &prompt, planner::MAX_PLAN_TOKENS)
+            .await
+        {
+            Ok(p) if planner::is_useful(&p) => p.trim().to_string(),
+            Ok(_) => {
+                info!("Planner produced nothing usable; proceeding unplanned");
+                String::new()
+            }
+            Err(e) => {
+                warn!(error = %e, "Planner call failed; proceeding unplanned");
+                String::new()
+            }
+        }
+    }
+
+    /// One line for the project journal.
+    ///
+    /// Deliberately not the agent's own prose: that is written to be read by a
+    /// human mid-session and reads as noise a week later.
+    pub async fn summarise_turn(&self, user_message: &str, agent_text: &str) -> String {
+        let system = "Summarise what was DONE in one line, under 30 words. State the outcome, \
+                      not the intent. No preamble.";
+        let prompt = format!(
+            "REQUEST: {}\n\nAGENT: {}",
+            truncate_head(user_message, 600),
+            truncate_tail(agent_text, 1200)
+        );
+        match self.call_llm_as("journal", system, &prompt, 80).await {
+            Ok(s) => truncate_head(s.trim().lines().next().unwrap_or(""), 200),
+            Err(e) => {
+                warn!(error = %e, "Journal summary failed; no entry written");
+                String::new()
+            }
+        }
+    }
+
+    /// Turn a session trace into a reusable skill. `None` when it declined.
+    pub async fn distill_skill(&self, trace: &str) -> Option<trajectory::DistilledSkill> {
+        match self
+            .call_llm_as("distill", trajectory::DISTILL_SYSTEM, trace, 1200)
+            .await
+        {
+            Ok(raw) => trajectory::parse_skill(&raw),
+            Err(e) => {
+                warn!(error = %e, "Skill distillation failed");
+                None
+            }
+        }
     }
 
     /// Quality review for complex tasks: assess whether the deliverable is done and good.
@@ -635,8 +814,7 @@ FAILED: <1-2 sentence reason why the task is not complete>"#;
 
 /// One-shot code reviewer and test generator using a dedicated code model.
 pub struct CodeReviewer {
-    anthropic_key: String,
-    openai_key: String,
+    keys: ApiKeySet,
     model: String,
     provider: Provider,
     http: Arc<reqwest::Client>,
@@ -644,16 +822,14 @@ pub struct CodeReviewer {
 
 impl CodeReviewer {
     pub fn new(
-        anthropic_key: &str,
-        openai_key: &str,
+        keys: &ApiKeySet,
         model: &str,
         explicit_provider: &str,
         http: Arc<reqwest::Client>,
     ) -> Self {
         let provider = resolve_provider(model, explicit_provider);
         Self {
-            anthropic_key: anthropic_key.to_string(),
-            openai_key: openai_key.to_string(),
+            keys: keys.clone(),
             model: model.to_string(),
             provider,
             http,
@@ -700,12 +876,15 @@ impl CodeReviewer {
 
     async fn call_llm(&self, system: &str, prompt: &str, max_tokens: usize) -> Result<String> {
         match self.provider {
-            Provider::OpenAI => self.call_openai(system, prompt, max_tokens).await,
             Provider::Anthropic => self.call_anthropic(system, prompt, max_tokens).await,
+            // OpenAI and DeepSeek share the chat-completions shape.
+            _ => self.call_openai_compatible(system, prompt, max_tokens).await,
         }
     }
 
-    async fn call_openai(&self, system: &str, prompt: &str, max_tokens: usize) -> Result<String> {
+    async fn call_openai_compatible(&self, system: &str, prompt: &str, max_tokens: usize) -> Result<String> {
+        let base = self.provider.base_url()
+            .ok_or_else(|| anyhow::anyhow!("provider has no OpenAI-compatible endpoint"))?;
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -715,15 +894,15 @@ impl CodeReviewer {
             "max_tokens": max_tokens,
         });
         let resp = self.http
-            .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.openai_key))
+            .post(format!("{}/chat/completions", base))
+            .header("Authorization", format!("Bearer {}", self.keys.for_provider(self.provider)))
             .header("Content-Type", "application/json")
             .json(&body)
-            .send().await.context("OpenAI code review request failed")?;
+            .send().await.with_context(|| format!("{} code review request failed", self.provider.as_str()))?;
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
-            anyhow::bail!("OpenAI code review error ({}): {}", status, if text.len() > 300 { let mut b = 300; while b > 0 && !text.is_char_boundary(b) { b -= 1; } &text[..b] } else { &text });
+            anyhow::bail!("{} code review error ({}): {}", self.provider.as_str(), status, if text.len() > 300 { let mut b = 300; while b > 0 && !text.is_char_boundary(b) { b -= 1; } &text[..b] } else { &text });
         }
         let json: serde_json::Value = serde_json::from_str(&text)?;
         Ok(json["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string())
@@ -738,7 +917,7 @@ impl CodeReviewer {
         });
         let resp = self.http
             .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.anthropic_key)
+            .header("x-api-key", &self.keys.anthropic)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&body)
@@ -944,4 +1123,62 @@ fn quick_classify(msg: &str) -> Option<PromptClass> {
         "Scorer: low confidence, falling through to LLM"
     );
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The durable-context passes themselves are network calls; their parsing is
+    // tested where it lives (memory::facts, agent::planner, agent::trajectory).
+    // What is worth testing here is the truncation both they and the older
+    // review passes depend on, because the failure mode is a panic on real user
+    // input rather than a wrong answer.
+
+    #[test]
+    fn short_input_is_returned_whole() {
+        assert_eq!(truncate_head("hello", 100), "hello");
+        assert_eq!(truncate_tail("hello", 100), "hello");
+        assert_eq!(truncate_head("", 10), "");
+        assert_eq!(truncate_tail("", 10), "");
+    }
+
+    #[test]
+    fn head_keeps_the_front_and_tail_keeps_the_back() {
+        assert_eq!(truncate_head("abcdef", 3), "abc");
+        assert_eq!(truncate_tail("abcdef", 3), "def");
+    }
+
+    #[test]
+    fn zero_max_is_not_a_panic() {
+        assert_eq!(truncate_head("abc", 0), "");
+        assert_eq!(truncate_tail("abc", 0), "");
+    }
+
+    #[test]
+    fn multibyte_input_does_not_panic_or_split_a_char() {
+        // The whole reason these helpers exist: byte-slicing this panics.
+        let greek = "καταστημα ".repeat(300);
+        let head = truncate_head(&greek, 600);
+        let tail = truncate_tail(&greek, 600);
+        assert_eq!(head.chars().count(), 600);
+        assert_eq!(tail.chars().count(), 600);
+        assert!(head.starts_with('κ'));
+        assert!(greek.ends_with(&tail));
+    }
+
+    #[test]
+    fn emoji_survive_truncation_intact() {
+        let s = "🙂🙃".repeat(200);
+        let out = truncate_head(&s, 5);
+        assert_eq!(out.chars().count(), 5);
+        assert!(out.starts_with('🙂'));
+    }
+
+    #[test]
+    fn a_boundary_length_input_is_unchanged() {
+        let s = "abcde";
+        assert_eq!(truncate_head(s, 5), s);
+        assert_eq!(truncate_tail(s, 5), s);
+    }
 }

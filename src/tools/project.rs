@@ -235,7 +235,7 @@ fn extract_symbols(path: &Path) -> Option<String> {
                     .or_else(|| t.strip_prefix("async def "))
                     .or_else(|| t.strip_prefix("class "))
                 {
-                    rest.split(|c: char| c == '(' || c == ':').next()
+                    rest.split(['(', ':']).next()
                         .map(|s| s.trim().to_string())
                 } else {
                     None
@@ -254,18 +254,18 @@ fn extract_symbols(path: &Path) -> Option<String> {
                     .or_else(|| t.strip_prefix("export class "))
                     .or_else(|| t.strip_prefix("export default function "))
                 {
-                    rest.split(|c: char| c == '(' || c == ' ' || c == '{').next()
+                    rest.split(['(', ' ', '{']).next()
                         .map(|s| s.trim().to_string())
                 } else if let Some(rest) = t.strip_prefix("export const ")
                     .or_else(|| t.strip_prefix("export let "))
                 {
-                    rest.split(|c: char| c == ':' || c == '=' || c == ' ').next()
+                    rest.split([':', '=', ' ']).next()
                         .map(|s| s.trim().to_string())
                 } else if !t.starts_with("//") && !t.starts_with("*") {
                     if let Some(rest) = t.strip_prefix("function ")
                         .or_else(|| t.strip_prefix("class "))
                     {
-                        rest.split(|c: char| c == '(' || c == ' ').next()
+                        rest.split(['(', ' ']).next()
                             .map(|s| s.trim().to_string())
                     } else {
                         None
@@ -332,7 +332,8 @@ fn build_architecture_map(working_dir: &str) -> String {
         if symbols.is_empty() {
             out.push_str(&format!("{}{}  [{}L]\n", indent, fname, line_count));
         } else {
-            let syms = if symbols.len() > 100 { &symbols[..100] } else { symbols.as_str() };
+            let syms = crate::agent::router::truncate_for_report(symbols, 100);
+            let syms = syms.as_str();
             out.push_str(&format!("{}{}  [{}L] — {}\n", indent, fname, line_count, syms));
         }
         if out.len() > 2000 {

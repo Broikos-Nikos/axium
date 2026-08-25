@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use std::sync::Arc;
-use super::{detect_provider, Message, Provider};
+use super::{resolve_provider, ApiKeySet, Message, Provider};
 
 /// System prompt for the compactor model. Gives it context about the agent so it
 /// produces higher-quality summaries that preserve actionable information.
@@ -21,28 +21,18 @@ Omit:\n\
 - Redundant file contents — note the file and purpose, not the code";
 
 pub struct Compactor {
-    anthropic_key: String,
-    openai_key: String,
+    keys: ApiKeySet,
     model: String,
     provider: Provider,
     http: Arc<reqwest::Client>,
 }
 
 impl Compactor {
-    pub fn new(anthropic_key: &str, openai_key: &str, model: &str, explicit_provider: &str, http: Arc<reqwest::Client>) -> Self {
-        let provider = if !explicit_provider.is_empty() {
-            match explicit_provider {
-                "anthropic" => Provider::Anthropic,
-                _ => Provider::OpenAI,
-            }
-        } else {
-            detect_provider(model)
-        };
+    pub fn new(keys: &ApiKeySet, model: &str, explicit_provider: &str, http: Arc<reqwest::Client>) -> Self {
         Self {
-            anthropic_key: anthropic_key.to_string(),
-            openai_key: openai_key.to_string(),
+            keys: keys.clone(),
             model: model.to_string(),
-            provider,
+            provider: resolve_provider(model, explicit_provider),
             http,
         }
     }
@@ -82,12 +72,16 @@ impl Compactor {
 
     async fn call_llm(&self, prompt: &str, max_tokens: usize) -> Result<String> {
         match self.provider {
-            Provider::OpenAI => self.call_openai(prompt, max_tokens).await,
             Provider::Anthropic => self.call_anthropic(prompt, max_tokens).await,
+            // OpenAI and DeepSeek share the chat-completions shape; only the
+            // base URL and key differ.
+            _ => self.call_openai_compatible(prompt, max_tokens).await,
         }
     }
 
-    async fn call_openai(&self, prompt: &str, max_tokens: usize) -> Result<String> {
+    async fn call_openai_compatible(&self, prompt: &str, max_tokens: usize) -> Result<String> {
+        let base = self.provider.base_url()
+            .ok_or_else(|| anyhow::anyhow!("provider has no OpenAI-compatible endpoint"))?;
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -99,22 +93,22 @@ impl Compactor {
 
         let resp = self
             .http
-            .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.openai_key))
+            .post(format!("{}/chat/completions", base))
+            .header("Authorization", format!("Bearer {}", self.keys.for_provider(self.provider)))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
             .await
-            .context("Failed to reach OpenAI API for compaction")?;
+            .with_context(|| format!("Failed to reach {} API for compaction", self.provider.as_str()))?;
 
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
-            anyhow::bail!("OpenAI compaction error ({}): {}", status, text);
+            anyhow::bail!("{} compaction error ({}): {}", self.provider.as_str(), status, text);
         }
 
         let json: serde_json::Value =
-            serde_json::from_str(&text).context("Failed to parse OpenAI response")?;
+            serde_json::from_str(&text).context("Failed to parse chat-completions response")?;
         Ok(json["choices"][0]["message"]["content"]
             .as_str()
             .unwrap_or("[compaction failed]")
@@ -132,7 +126,7 @@ impl Compactor {
         let resp = self
             .http
             .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.anthropic_key)
+            .header("x-api-key", &self.keys.anthropic)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&body)

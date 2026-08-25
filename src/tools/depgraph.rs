@@ -46,7 +46,7 @@ pub fn get_dependency_graph(path: &str, direction: &str, working_dir: &str) -> S
         } else {
             out.push_str("Dependencies (this file imports):\n");
             for dep in deps {
-                out.push_str(&format!("  {}\n", rel(&dep, &src_dir)));
+                out.push_str(&format!("  {}\n", rel(dep, &src_dir)));
             }
         }
     }
@@ -94,7 +94,7 @@ fn build_import_map(src_dir: &Path) -> HashMap<PathBuf, Vec<PathBuf>> {
                 t.strip_prefix("pub use crate::")
             }) {
                 // Take the module path segment before `::{`, ` as `, `;`, or whitespace
-                let end = rest.find(|c: char| c == ';' || c == ' ' || c == '\n')
+                let end = rest.find([';', ' ', '\n'])
                     .unwrap_or(rest.len());
                 let seg = &rest[..end];
                 // Strip trailing ::{...} group imports — take up to the last :: before {

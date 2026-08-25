@@ -70,6 +70,9 @@ struct LoadedPlugin {
 // ── PluginManager ────────────────────────────────────────────────────
 
 pub struct PluginManager {
+    // Where the plugins were loaded from. Carried for diagnostics and for a
+    // future `reload()` caller; not read on the current path.
+    #[allow(dead_code)]
     plugins_dir: PathBuf,
     state_file: PathBuf,
     plugins: Vec<LoadedPlugin>,
@@ -235,19 +238,18 @@ impl PluginManager {
                 None => continue,
             };
 
-            match run_hook_script(script, &current_input).await {
-                Some(mods) => {
-                    // Merge modifications into current_input for chaining
-                    if let Some(obj) = mods.as_object() {
-                        if let Some(cur) = current_input.as_object_mut() {
-                            for (k, v) in obj {
-                                cur.insert(k.clone(), v.clone());
-                            }
+            // No output or error just passes through: a hook that fails must not
+            // stop the chain.
+            if let Some(mods) = run_hook_script(script, &current_input).await {
+                // Merge modifications into current_input for chaining
+                if let Some(obj) = mods.as_object() {
+                    if let Some(cur) = current_input.as_object_mut() {
+                        for (k, v) in obj {
+                            cur.insert(k.clone(), v.clone());
                         }
                     }
-                    any_modification = true;
                 }
-                None => {} // no output or error — pass through
+                any_modification = true;
             }
         }
 
@@ -259,6 +261,10 @@ impl PluginManager {
     }
 
     /// Reload plugin list from disk (useful after adding/removing folders).
+    // Plugin API: reload after a folder is added or removed. No caller yet;
+    // removing it would mean re-deriving it the first time plugins are
+    // hot-reloaded.
+    #[allow(dead_code)]
     pub fn reload(&mut self) {
         let fresh = Self::load();
         self.plugins = fresh.plugins;
@@ -377,6 +383,8 @@ async fn run_hook_script(
 
 /// Convenience function: run hooks on an optional PluginManager reference.
 /// Used from router.rs and worker.rs where the manager is behind Option<Arc<RwLock<>>>.
+// Plural form of `run_hook`, for a caller that fires several hooks at once.
+#[allow(dead_code)]
 pub async fn run_hooks(
     pm: &Option<std::sync::Arc<RwLock<PluginManager>>>,
     hook_name: &str,

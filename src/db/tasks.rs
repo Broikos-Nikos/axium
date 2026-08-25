@@ -112,6 +112,9 @@ impl TaskDb {
     }
 
     /// Fetch a single task by ID.
+    // Task-queue API used by the TUI's task detail view historically; kept as
+    // the natural read counterpart to `claim_pending`/`update_task`.
+    #[allow(dead_code)]
     pub fn get_task(&self, id: i64) -> Result<Option<Task>> {
         let conn = self.conn();
         let sql = format!("SELECT {} FROM tasks WHERE id = ?1", TASK_COLS);

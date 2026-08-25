@@ -1,15 +1,20 @@
 use anyhow::Result;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tracing::{info, warn, error};
 use chrono::Local;
 
+use super::brain;
+use super::planner;
+use super::checkpoints::Checkpoints;
+use super::trajectory::Trajectory;
 use super::classifier::{Classifier, PromptClass};
 use super::compactor::Compactor;
 use super::sonnet::SonnetClient;
 use super::{estimate_tokens, Message};
 use crate::db::tasks::TaskDb;
 use crate::db::history::ChatDb;
+use crate::memory::facts::FactStore;
 use crate::memory::store::Memory;
 use crate::tools;
 
@@ -106,8 +111,7 @@ pub struct TurnConfig {
     pub conversation_logging: bool,
     // Subagent fields — needed to spawn a fresh agent with the same credentials
     pub http: Arc<reqwest::Client>,
-    pub anthropic_key: String,
-    pub openai_key: String,
+    pub keys: super::ApiKeySet,
     pub primary_model: String,
     pub primary_provider: String,
     pub subagent_depth: u8,
@@ -140,6 +144,31 @@ pub struct TurnConfig {
     pub conv_logger: Option<ConvLogger>,
     /// Chat database for cross-session history search.
     pub chat_db: Arc<ChatDb>,
+    /// Where this turn's cost is billed. `None` outside a metered run — the
+    /// interactive channels do not pay for the bookkeeping, the benchmark does.
+    pub meter: Option<crate::agent::metrics::MeterHandle>,
+    /// Typed, importance-scored facts. Shared across the turns of a session — a
+    /// fact captured in turn 1 must be in front of the model in turn 20. `None`
+    /// when `facts_enabled` is off, which removes the fact tools with it.
+    pub facts: Option<Arc<FactStore>>,
+    /// Preload the per-project Brain into the stable half of the system prompt.
+    pub brain_enabled: bool,
+    /// Run a cheap grounded plan before a COMPLEX task starts.
+    pub planner_enabled: bool,
+    /// Distill a substantive session into a reusable skill folder.
+    pub distill_skills: bool,
+    /// Per-session trace of (request, tools, outcome). Feeds skill distillation
+    /// and is useful on its own as a record of what the agent actually did.
+    pub trajectory: Option<Arc<Mutex<Trajectory>>>,
+    /// Where a distilled skill is written. Empty = the repo's `axium-skills/`.
+    pub skills_dir: String,
+    /// Pre-write snapshots for `undo_turn`. A `Mutex` because `record` mutates
+    /// and the tool layer only ever has `&TurnConfig`; contention is nil, since
+    /// tool calls within a turn are executed one at a time.
+    ///
+    /// A sub-agent is given `None` on purpose: undoing the parent's turn from
+    /// inside a delegated sub-task is a bug, not a feature.
+    pub checkpoints: Option<Arc<Mutex<Checkpoints>>>,
 }
 
 /// A pending memory operation returned from the agent loop.
@@ -152,6 +181,10 @@ pub struct MemoryOp {
 
 /// Classify the user's prompt, then either answer trivially or run the full agent turn.
 /// Returns (final_text, memory_ops, was_enhanced).
+// Threading these through a struct would duplicate `TurnConfig`, which
+// already carries the configuration half. The rest are genuinely distinct
+// collaborators (classifier, model client, compactor, history, memory).
+#[allow(clippy::too_many_arguments)]
 pub async fn classify_and_run(
     classifier: &Classifier,
     sonnet: &SonnetClient,
@@ -204,6 +237,7 @@ pub async fn classify_and_run(
                 match classifier.analyze_skills(&user_msg).await {
                     Ok(ctx) if !ctx.is_empty() => {
                         info!(skill_len = ctx.len(), "Skills loaded successfully");
+                        crate::agent::metrics::bump(cfg.meter.as_ref(), "skills_loaded");
                         skill_context = ctx;
                     }
                     Ok(_) => {
@@ -218,13 +252,22 @@ pub async fn classify_and_run(
         _ => {
             // Supercharge mode (default): existing classification behavior
             if should_classify {
-                match classifier.classify(&user_msg).await {
+                // The classifier sees the facts too: its TRIVIAL path answers
+                // without ever reaching the agent, so a fact it cannot see is a
+                // fact the user is told we do not have.
+                let classify_facts = cfg
+                    .facts
+                    .as_ref()
+                    .and_then(|f| f.render(Some(&fact_scope(&cfg.working_directory))).ok())
+                    .unwrap_or_default();
+                match classifier.classify(&user_msg, &classify_facts).await {
                     Ok(PromptClass::Trivial(answer)) => {
                         info!(class = "trivial", "Classifier: answering directly");
                         let _ = tx.send(AgentEvent::Classified {
                             class: "trivial".into(),
                             detail: "Answering directly with fast model".into(),
                         });
+                        crate::agent::metrics::bump(cfg.meter.as_ref(), "trivial_shortcut");
                         let _ = tx.send(AgentEvent::TrivialAnswer(answer.clone()));
                         let _ = tx.send(AgentEvent::Text(answer.clone()));
                         let _ = tx.send(AgentEvent::Done);
@@ -248,6 +291,7 @@ pub async fn classify_and_run(
                                 user_msg, enhanced
                             );
                         }
+                        crate::agent::metrics::bump(cfg.meter.as_ref(), "prompt_enhanced");
                         enhanced_msg = Some(enhanced);
                     }
                     Ok(PromptClass::Simple) => {
@@ -285,14 +329,49 @@ pub async fn classify_and_run(
         })).await;
     }
 
-    // Inject skill context into soul if skills mode loaded anything
-    let effective_soul;
-    let soul_ref = if !skill_context.is_empty() {
-        effective_soul = format!("{}\n\n[LOADED SKILLS]\n{}", soul, skill_context);
-        &effective_soul
-    } else {
-        soul
-    };
+    // Skills and the plan are chosen PER MESSAGE, so they go in the volatile half
+    // of the system prompt. Folding them into the soul (as this did) put them
+    // ABOVE the [MEMORY] cache breakpoint, which invalidated the whole cached
+    // prefix on every turn that selected a different skill.
+    let soul_ref = soul;
+
+    // A grounded plan for complex work. The classifier fixed the WORDING of the
+    // task and knows nothing about this codebase; the planner sees the Brain and
+    // names real files, so the primary model skips the orientation round-trips it
+    // would otherwise pay for at full price.
+    let mut plan = String::new();
+    if is_complex && cfg.planner_enabled && cfg.subagent_depth == 0 {
+        let brain_ctx = if cfg.brain_enabled {
+            brain::preload(&cfg.working_directory)
+        } else {
+            String::new()
+        };
+        let facts_block = cfg
+            .facts
+            .as_ref()
+            .and_then(|f| f.render(Some(&fact_scope(&cfg.working_directory))).ok())
+            .unwrap_or_default();
+        let task = history.last().map(|m| m.content.clone()).unwrap_or_default();
+        plan = classifier.plan(&task, &brain_ctx, &facts_block).await;
+        if !plan.is_empty() {
+            crate::agent::metrics::bump(cfg.meter.as_ref(), "planned");
+            info!(steps = plan.lines().count(), "Planner produced a grounded plan");
+        }
+    }
+
+    let mut volatile_context = String::new();
+    if !skill_context.is_empty() {
+        volatile_context.push_str(&format!("\n[LOADED SKILLS]\n{}\n", skill_context));
+    }
+    if !plan.is_empty() {
+        volatile_context.push_str(&format!("\n{}\n", planner::render(&plan)));
+    }
+
+    // Snapshot every file this turn touches, so undo_turn can revert it exactly.
+    if let Some(cp) = cfg.checkpoints.as_ref() {
+        let label: String = user_msg.chars().take(120).collect();
+        cp.lock().unwrap_or_else(|e| e.into_inner()).begin(&label);
+    }
 
     // ── Verification loop for complex tasks ──────────────────────────────
     // Simple/trivial: single pass. Complex: plan → execute → 1 review round max.
@@ -312,9 +391,20 @@ pub async fn classify_and_run(
 
     for round in 0..MAX_VERIFY_ROUNDS {
         let pre_turn_len = history.len();
-        let (text, mem_ops, turn_compacted) = run_agent_turn(
+        // A failed turn is mined into a `gotcha` fact before the error propagates,
+        // so the next run on this project starts warned instead of walking into
+        // the same wall. The error is still returned: this records, never swallows.
+        let turn_result = run_agent_turn(
             classifier, sonnet, compactor, history, memory, soul_ref, project_context, task_db, &cfg, tx, all_cheap,
-        ).await?;
+            &volatile_context,
+        ).await;
+        let (text, mem_ops, turn_compacted) = match turn_result {
+            Ok(v) => v,
+            Err(e) => {
+                mine_turn_failure(&cfg, &user_msg, &e.to_string());
+                return Err(e);
+            }
+        };
 
         // If history shrank, compaction happened in-place — update the baseline so
         // the truncate at the end of the loop only removes ephemeral review messages.
@@ -416,8 +506,7 @@ pub async fn classify_and_run(
 
             if diff.trim().len() > 500 {
                 let reviewer = crate::agent::classifier::CodeReviewer::new(
-                    &cfg.anthropic_key,
-                    &cfg.openai_key,
+                    &cfg.keys,
                     &cfg.review_model,
                     &cfg.review_provider,
                     Arc::clone(&cfg.http),
@@ -484,6 +573,7 @@ pub async fn classify_and_run(
                         history.push(Message::user(&repair_msg));
                         let (repair_text, repair_ops, _) = run_agent_turn(
                             classifier, sonnet, compactor, history, memory, soul_ref, project_context, task_db, &cfg, tx, false,
+                            &volatile_context,
                         ).await?;
                         history.push(Message { role: "assistant".into(), content: strip_think_tags(&strip_tool_log(&repair_text)) });
                         all_memory_ops.extend(repair_ops);
@@ -522,10 +612,133 @@ pub async fn classify_and_run(
         }
     }
 
+    // ── post-turn learning ───────────────────────────────────────────────
+    // Everything below is best-effort. A failure here must cost a fact, a
+    // journal line or a distilled skill — never the turn that already succeeded.
+    // The checkpoint's file list IS the turn's changed set, so nothing needs to
+    // track it twice. With checkpoints disabled there is no set and the journal
+    // stays quiet — an ablation-only configuration, noted in AXIUM_UPGRADE.md.
+    let changed_files = match cfg.checkpoints.as_ref() {
+        Some(cp) => {
+            let mut cp = cp.lock().unwrap_or_else(|e| e.into_inner());
+            cp.commit();
+            cp.last_files()
+        }
+        None => Vec::new(),
+    };
+    let tool_names: Vec<String> = combined_tool_log
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .map(|s| s.trim_matches(|c: char| !c.is_alphanumeric() && c != '_').to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    after_turn(classifier, &cfg, &user_msg, &combined_text, &changed_files, &tool_names, tx).await;
+
     Ok((combined_text, all_memory_ops, compacted))
 }
 
+/// Capture what the turn should still know next week: durable facts, a journal
+/// entry, and (rarely) a distilled skill.
+///
+/// Split out of `classify_and_run` because that function is already long and
+/// this is a distinct concern with a distinct failure policy — nothing here is
+/// allowed to affect what the user gets back.
+async fn after_turn(
+    classifier: &Classifier,
+    cfg: &TurnConfig,
+    user_msg: &str,
+    agent_text: &str,
+    changed_files: &[String],
+    tool_names: &[String],
+    tx: &mpsc::UnboundedSender<AgentEvent>,
+) {
+    if cfg.subagent_depth > 0 {
+        return; // a sub-agent's turn belongs to its parent
+    }
+    let scope = fact_scope(&cfg.working_directory);
+
+    if let Some(store) = cfg.facts.as_ref() {
+        let correction = crate::memory::facts::looks_like_correction(user_msg);
+        if correction {
+            info!("User correction detected; extracted facts will be floored high");
+        }
+        let learned = classifier.extract_facts(user_msg, agent_text, correction).await;
+        for row in &learned {
+            if let Err(e) = store.remember(
+                &row.value, &row.kind, &row.key, row.importance, &scope, "auto",
+            ) {
+                warn!(error = %e, "Could not store extracted fact");
+            }
+        }
+        if !learned.is_empty() {
+            if let Some(m) = cfg.meter.as_ref() {
+                m.lock().unwrap_or_else(|e| e.into_inner()).bump_by("facts_learned", learned.len() as u64);
+            }
+            let _ = tx.send(AgentEvent::Classified {
+                class: "facts".into(),
+                detail: format!("{} durable fact(s) learned", learned.len()),
+            });
+        }
+    }
+
+    // The journal is what makes "continue where we left off" survive a restart.
+    // Only turns that actually changed something earn an entry.
+    if cfg.brain_enabled && !changed_files.is_empty() {
+        let summary = classifier.summarise_turn(user_msg, agent_text).await;
+        if !summary.is_empty() {
+            brain::journal(&cfg.working_directory, &summary, changed_files, user_msg);
+        }
+    }
+
+    // Trace the turn, then distil only if this session earned it. The gates
+    // matter more than the distillation: a skill written after every trivial turn
+    // fills the selector prompt with noise, which is worse than having none.
+    let Some(traj) = cfg.trajectory.as_ref() else { return };
+    let (should, trace) = {
+        let mut t = traj.lock().unwrap_or_else(|e| e.into_inner());
+        t.record(user_msg, tool_names, changed_files, agent_text, None);
+        (cfg.distill_skills && t.should_distill(), t.as_prompt())
+    };
+    if !should {
+        return;
+    }
+    // The lock is released across the await on purpose: a distillation call takes
+    // seconds, and holding a session-wide lock through it would stall the next turn.
+    if let Some(skill) = classifier.distill_skill(&trace).await {
+        let root = if cfg.skills_dir.is_empty() { "axium-skills".to_string() } else { cfg.skills_dir.clone() };
+        let path = crate::agent::trajectory::write_skill(&skill, &root);
+        if !path.is_empty() {
+            traj.lock().unwrap_or_else(|e| e.into_inner()).distilled = true;
+            info!(skill = %skill.name, path = %path, "Distilled a reusable skill from this session");
+            let _ = tx.send(AgentEvent::Classified {
+                class: "skill".into(),
+                detail: format!("Learned skill: {}", skill.name),
+            });
+        }
+    }
+}
+
+/// Turn a failed turn into a `gotcha` fact. Best-effort and silent on failure:
+/// this runs on a path that is already going wrong.
+fn mine_turn_failure(cfg: &TurnConfig, user_msg: &str, error: &str) {
+    let Some(store) = cfg.facts.as_ref() else { return };
+    if cfg.subagent_depth > 0 {
+        return;
+    }
+    if let Some(g) = crate::memory::facts::mine_failure(user_msg, error, "") {
+        let scope = fact_scope(&cfg.working_directory);
+        if let Err(e) = store.remember(&g.value, &g.kind, &g.key, g.importance, &scope, "failure") {
+            warn!(error = %e, "Could not store failure gotcha");
+        }
+    }
+}
+
+
 /// Run the full agent turn: plan → compaction → tool loop → heartbeat → final text.
+// Threading these through a struct would duplicate `TurnConfig`, which
+// already carries the configuration half. The rest are genuinely distinct
+// collaborators (classifier, model client, compactor, history, memory).
+#[allow(clippy::too_many_arguments)]
 pub async fn run_agent_turn(
     classifier: &Classifier,
     sonnet: &SonnetClient,
@@ -538,6 +751,9 @@ pub async fn run_agent_turn(
     cfg: &TurnConfig,
     tx: &mpsc::UnboundedSender<AgentEvent>,
     all_cheap: bool,
+    // Per-message additions to the system prompt: loaded skills and the plan.
+    // Kept separate from `soul` because these sit BELOW the cache breakpoint.
+    volatile_context: &str,
 ) -> Result<(String, Vec<MemoryOp>, bool)> {
     // Build active tasks summary (kept compact)
     let tasks_summary = match task_db.list_active_tasks() {
@@ -554,15 +770,77 @@ pub async fn run_agent_turn(
     // tasks_summary is intentionally excluded: it changes frequently (task create/update/complete)
     // and would bust the Anthropic cache for the entire memory+project block on every change.
     // Tasks are injected into api_msgs below so they land in the volatile messages layer instead.
-    let system = format!(
+    // Order here is a caching decision, not a stylistic one. `sonnet.rs` splits
+    // this string at the [MEMORY] marker: everything ABOVE is sent with a cache
+    // breakpoint and must be stable across a session; everything BELOW is re-sent
+    // each turn. So the Project Brain (per project, stable) goes above, and
+    // memory, facts, skills and the plan (per turn) go below.
+    let brain_block = if cfg.brain_enabled {
+        let preloaded = brain::preload(&cfg.working_directory);
+        if preloaded.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\n[PROJECT BRAIN]\nWhat is already known about this project from \
+                 earlier sessions. Trust it, but verify anything you are about to \
+                 change.\n\n{}",
+                preloaded
+            )
+        }
+    } else {
+        String::new()
+    };
+
+    let facts_block = match cfg.facts.as_ref() {
+        Some(store) => match store.render(Some(&fact_scope(&cfg.working_directory))) {
+            Ok(r) if !r.is_empty() => format!("\n[FACTS]\n{}\n", r),
+            _ => String::new(),
+        },
+        None => String::new(),
+    };
+
+    // Describing a block the agent will never be shown invites it to invent one,
+    // so each of these is emitted only when its subsystem is live.
+    let facts_instructions = if cfg.facts.is_some() {
+        "\n[STANDING FACTS]\n[FACTS] holds rules, thresholds and decisions that are \
+         still binding. They were captured in earlier turns and are shown to you in full \
+         every turn, so a number there is the number: never say you no longer have it, and \
+         never re-derive it from the conversation. Add to it with remember_fact when the \
+         user states a rule you will need later; search it with recall.\n"
+    } else {
+        ""
+    };
+    let undo_instructions = if cfg.checkpoints.is_some() {
+        "\n[UNDOING WORK]\nEvery file you change is snapshotted before the write. When \
+         asked to put something back, revert, or undo what you just did, call undo_turn: it \
+         restores the exact bytes and removes files the turn created. Rewriting the files \
+         from memory is slower and is not exact.\n"
+    } else {
+        ""
+    };
+
+    // The cached half. Assembled separately so the marker below can be joined on
+    // exactly, rather than depending on whether the last block happened to end in
+    // a newline: `sonnet.rs` matches "\n\n[MEMORY]\n" literally, and a one-newline
+    // near-miss silently disables prompt caching for every request of the session.
+    let cached_head = format!(
         "{}\n\n\
         [TOOL EFFICIENCY]\n\
         If you need to call multiple tools and there are no dependencies between them, \
         call all independent tools in a single response. For example, read multiple files \
         at once, or run a command while writing a file. Never use placeholders — only call \
-        tools when you have all required parameters.\n\n\
-        [MEMORY]\n{}\n{}",
-        soul, memory.content, project_context
+        tools when you have all required parameters.\n\
+        {}{}{}",
+        soul, facts_instructions, undo_instructions, brain_block
+    );
+    let system = format!(
+        "{}{}{}\n{}{}{}",
+        cached_head.trim_end(),
+        SYSTEM_CACHE_MARKER,
+        memory.content,
+        project_context,
+        facts_block,
+        volatile_context
     );
 
     // --- Git checkpoint ---
@@ -584,14 +862,15 @@ pub async fn run_agent_turn(
     let pct = cfg.compaction_threshold.clamp(10, 100);
     let compact_threshold = cfg.token_limit * pct / 100;
     let mut api_msgs: Vec<serde_json::Value> = if token_est > compact_threshold && history.len() > 4 {
+        crate::agent::metrics::bump(cfg.meter.as_ref(), "compactions");
         info!(tokens = token_est, threshold = compact_threshold, limit = cfg.token_limit, pct, "Compacting conversation history");
         // Target: keep enough recent messages to stay at (pct - 20)% of the limit,
         // leaving headroom for the tool loop to grow within cache.
         let target_pct = pct.saturating_sub(20).max(10);
         let avg_tokens_per_msg = token_est / history.len();
         let target_recent_tokens = cfg.token_limit * target_pct / 100;
-        let keep = if avg_tokens_per_msg > 0 {
-            (target_recent_tokens / avg_tokens_per_msg).max(3)
+        let keep = if let Some(n) = target_recent_tokens.checked_div(avg_tokens_per_msg) {
+            n.max(3)
         } else {
             3
         };
@@ -668,7 +947,7 @@ pub async fn run_agent_turn(
     let continuation_client: Option<SonnetClient> =
         if !cfg.continuation_model.is_empty() && cfg.continuation_model != cfg.primary_model {
             Some(SonnetClient::new(
-                &cfg.anthropic_key, &cfg.openai_key,
+                &cfg.keys,
                 &cfg.continuation_model, &cfg.continuation_provider,
                 sonnet.max_tokens(), Arc::clone(&cfg.http),
             ))
@@ -680,7 +959,7 @@ pub async fn run_agent_turn(
     let fallback_client: Option<SonnetClient> =
         if !cfg.fallback_model.is_empty() && cfg.fallback_model != cfg.primary_model {
             Some(SonnetClient::new(
-                &cfg.anthropic_key, &cfg.openai_key,
+                &cfg.keys,
                 &cfg.fallback_model, &cfg.fallback_provider,
                 sonnet.max_tokens(), Arc::clone(&cfg.http),
             ))
@@ -759,15 +1038,43 @@ pub async fn run_agent_turn(
             }
         }
 
+        // Billed by which MODEL answered, not by call index: a SIMPLE turn runs
+        // its first call on the cheap model, and calling that "primary" would
+        // misstate every cost split. This is what lets a benchmark show whether
+        // cheap routing actually pays for itself.
+        let call_role = if !cfg.continuation_model.is_empty()
+            && active_sonnet.model() == cfg.continuation_model
+        {
+            "continuation"
+        } else {
+            "primary"
+        };
+        let call_started = std::time::Instant::now();
         let response = match active_sonnet.call_streaming(&system, &mut api_msgs, &delta_tx, force_tool_next, &cfg.thinking_effort, &cfg.mode).await {
             Ok(r) => {
                 consecutive_errors = 0;
                 force_tool_next = false;
                 drop(delta_tx);
                 let _ = fwd_handle.await;
+                crate::agent::metrics::record(
+                    cfg.meter.as_ref(),
+                    call_role,
+                    active_sonnet.model(),
+                    crate::agent::metrics::usage_from_response(&r),
+                    call_started.elapsed().as_secs_f64(),
+                    None,
+                );
                 r
             }
             Err(e) => {
+                crate::agent::metrics::record(
+                    cfg.meter.as_ref(),
+                    call_role,
+                    active_sonnet.model(),
+                    crate::agent::metrics::Usage::default(),
+                    call_started.elapsed().as_secs_f64(),
+                    Some(e.to_string()),
+                );
                 drop(delta_tx);
                 let _ = fwd_handle.await;
                 match parse_http_status(&e) {
@@ -815,7 +1122,7 @@ pub async fn run_agent_turn(
                                 consecutive_errors = 0;
                                 let _ = tx.send(AgentEvent::ToolOutput {
                                     name: "system".into(),
-                                    stdout: format!("Primary model failed — switching to fallback model..."),
+                                    stdout: "Primary model failed — switching to fallback model...".to_string(),
                                     stderr: String::new(),
                                     code: 0,
                                 });
@@ -931,6 +1238,11 @@ pub async fn run_agent_turn(
                     || l.contains("send_file") || l.contains("patch_file")
                     || (l.contains("git_command") && l.contains("commit")))
                 .unwrap_or(false);
+            // Each branch returns `true` for a DIFFERENT reason, and the reason is
+            // the point: this chain is the record of why a turn was accepted
+            // without paying for a heartbeat call. Collapsing them into one
+            // condition would satisfy clippy and delete the documentation.
+            #[allow(clippy::if_same_then_else)]
             let is_complete = if !any_tools_called {
                 true
             } else if tool_log.len() < HEARTBEAT_TOOL_THRESHOLD {
@@ -1045,9 +1357,21 @@ pub async fn run_agent_turn(
                 let cfg_clone = cfg.clone();
                 let tool_id_for_timeout = tool_id.clone();
                 let handle = tokio::spawn(async move {
+                    let started = std::time::Instant::now();
                     let result = execute_tool(
                         &tool_name, &input, &cfg_clone, &task_db_clone, &tx_clone,
                     ).await;
+                    // Recorded here rather than at the collection point: the
+                    // duration of a tool is what it took, not how long the
+                    // slowest sibling in the batch made it wait.
+                    let (ok, len) = match &result {
+                        Ok((text, _)) => (!text.starts_with("Error:"), text.len()),
+                        Err(_) => (false, 0),
+                    };
+                    crate::agent::metrics::record_tool(
+                        cfg_clone.meter.as_ref(), &tool_name, ok,
+                        started.elapsed().as_secs_f64(), len,
+                    );
                     (tool_id, tool_name, result)
                 });
                 handles.push((tool_id_for_timeout, handle));
@@ -1081,7 +1405,7 @@ pub async fn run_agent_turn(
                                 let _ = pm.run_hook("on_tool_after", &serde_json::json!({
                                     "tool": tool_name,
                                     "success": true,
-                                    "result": if text.len() > 1000 { &text[..1000] } else { text.as_str() },
+                                    "result": truncate_for_report(text.as_str(), 1000),
                                 })).await;
                             }
                             tool_results.push(serde_json::json!({
@@ -1152,7 +1476,17 @@ pub async fn run_agent_turn(
             } else {
                 // ask_user / plan_file_changes — run inline with no wrapping timeout
                 // (they have their own internal timeouts: 300s / 120s)
-                match execute_tool(&tool_name, &input, cfg, task_db, tx).await {
+                let inline_started = std::time::Instant::now();
+                let inline_result = execute_tool(&tool_name, &input, cfg, task_db, tx).await;
+                let (ok, len) = match &inline_result {
+                    Ok((text, _)) => (!text.starts_with("Error:"), text.len()),
+                    Err(_) => (false, 0),
+                };
+                crate::agent::metrics::record_tool(
+                    cfg.meter.as_ref(), &tool_name, ok,
+                    inline_started.elapsed().as_secs_f64(), len,
+                );
+                match inline_result {
                     Ok((text, maybe_op)) => {
                         if let Some(op) = maybe_op {
                             memory_ops.push(op);
@@ -1180,7 +1514,7 @@ pub async fn run_agent_turn(
                 let _ = pm.run_hook("on_tool_after", &serde_json::json!({
                     "tool": tool_name,
                     "success": true,
-                    "result": if result.len() > 1000 { &result[..1000] } else { result.as_str() },
+                    "result": truncate_for_report(result.as_str(), 1000),
                 })).await;
             }
             tool_results.push(serde_json::json!({
@@ -1229,8 +1563,8 @@ pub async fn run_agent_turn(
             info!(tokens = midturn_token_est, threshold = compact_threshold, "Mid-turn compaction triggered");
             let target_pct = pct.saturating_sub(20).max(10);
             let avg = (midturn_token_est.saturating_sub(6000)) / api_msgs.len();
-            let keep = if avg > 0 {
-                (cfg.token_limit * target_pct / 100 / avg).max(3)
+            let keep = if let Some(n) = (cfg.token_limit * target_pct / 100).checked_div(avg) {
+                n.max(3)
             } else {
                 api_msgs.len()
             };
@@ -1303,12 +1637,57 @@ pub async fn run_agent_turn(
 /// Maximum file size for read_file tool (1 MB).
 const MAX_READ_FILE_SIZE: u64 = 1_048_576;
 
+const BACKSLASH: char = '\\';
+
+/// Canonicalise a path for prefix comparison.
+///
+/// Windows `canonicalize` returns an extended-length path (`\\?\C:\...`, or
+/// `\\?\UNC\server\share` for network paths). Nothing else in the process
+/// produces paths in that form, so a raw `starts_with` against `$HOME` never
+/// matched and `is_write_safe` returned false for EVERY path on Windows - which
+/// silently disabled write_file, patch_file, append_file, delete and move.
+///
+/// It was not obvious because the model routes around it: it retries through
+/// the shell and the edit still lands, just several turns later. It surfaced as
+/// a benchmark result ("the write was blocked ... the block came from the
+/// harness itself") rather than as a crash.
+fn normalise_for_compare(p: &std::path::Path) -> String {
+    let s = p.to_string_lossy().replace(BACKSLASH, "/");
+    let s = s.strip_prefix("//?/UNC/").map(|r| format!("//{}", r))
+        .unwrap_or_else(|| s.strip_prefix("//?/").unwrap_or(&s).to_string());
+    if cfg!(windows) { s.to_lowercase() } else { s }
+}
+
+/// The user's home directory, canonicalised the same way.
+///
+/// `HOME` under Git Bash on Windows is a POSIX path (`/c/Users/name`) that no
+/// Windows API will resolve, so `USERPROFILE` is preferred there. An
+/// unresolvable value is treated as absent rather than as a prefix that matches
+/// nothing, because "no home" must not mean "block everything".
+fn home_for_compare() -> Option<String> {
+    let candidates: [&str; 2] = if cfg!(windows) {
+        ["USERPROFILE", "HOME"]
+    } else {
+        ["HOME", "USERPROFILE"]
+    };
+    for key in candidates {
+        let raw = std::env::var(key).unwrap_or_default();
+        if raw.is_empty() {
+            continue;
+        }
+        if let Ok(p) = std::fs::canonicalize(&raw) {
+            return Some(normalise_for_compare(&p));
+        }
+    }
+    None
+}
+
 /// Paths that the agent must not write to.
 fn is_write_safe(path: &str) -> bool {
     let resolved = match std::fs::canonicalize(path) {
         Ok(p) => p,
         Err(_) => {
-            // File doesn't exist yet — canonicalize parent
+            // File doesn't exist yet - canonicalize parent
             if let Some(parent) = std::path::Path::new(path).parent() {
                 let file_name = match std::path::Path::new(path).file_name() {
                     Some(f) => f,
@@ -1323,7 +1702,7 @@ fn is_write_safe(path: &str) -> bool {
             }
         }
     };
-    let s = resolved.to_string_lossy();
+    let s = normalise_for_compare(&resolved);
     let blocked = [
         "/etc", "/usr", "/boot", "/sys", "/proc",
         "/var/run", "/var/log", "/var/lib", "/var/spool",
@@ -1334,14 +1713,27 @@ fn is_write_safe(path: &str) -> bool {
             return false;
         }
     }
-    let home = std::env::var("HOME").unwrap_or_default();
-    if !home.is_empty() && !s.starts_with(&home) {
-        return false;
+    // Windows equivalents. The POSIX list above cannot match a drive-letter
+    // path, so without these the guard protected nothing at all on Windows.
+    if cfg!(windows) {
+        let win_blocked = ["/windows/", "/program files", "/programdata/"];
+        let after_drive = s.get(2..).unwrap_or("");
+        for b in &win_blocked {
+            if after_drive.starts_with(b) {
+                return false;
+            }
+        }
     }
-    let blocked_home = [".ssh", ".gnupg"];
-    for dir in &blocked_home {
-        if s.starts_with(&format!("{}/{}", home, dir)) {
+    // Confine writes to the home tree when a home directory is known. If it is
+    // not resolvable, fall through: an unknown home must not block every write.
+    if let Some(home) = home_for_compare() {
+        if !s.starts_with(&home) {
             return false;
+        }
+        for dir in [".ssh", ".gnupg"] {
+            if s.starts_with(&format!("{}/{}", home, dir)) {
+                return false;
+            }
         }
     }
     true
@@ -1351,17 +1743,16 @@ fn is_write_safe(path: &str) -> bool {
 fn is_read_safe(path: &str) -> bool {
     let resolved = match std::fs::canonicalize(path) {
         Ok(p) => p,
-        Err(_) => return true, // file doesn't exist — let the read error naturally
+        Err(_) => return true, // file doesn't exist - let the read error naturally
     };
-    let s = resolved.to_string_lossy();
-    let blocked_exact = ["/etc/shadow", "/etc/gshadow"];
-    for b in &blocked_exact {
-        if s.as_ref() == *b { return false; }
+    let s = normalise_for_compare(&resolved);
+    for b in ["/etc/shadow", "/etc/gshadow"] {
+        if s == b {
+            return false;
+        }
     }
-    let home = std::env::var("HOME").unwrap_or_default();
-    if !home.is_empty() {
-        let blocked_home = [".ssh", ".gnupg", ".aws", ".kube"];
-        for dir in &blocked_home {
+    if let Some(home) = home_for_compare() {
+        for dir in [".ssh", ".gnupg", ".aws", ".kube"] {
             if s.starts_with(&format!("{}/{}", home, dir)) {
                 return false;
             }
@@ -1533,6 +1924,94 @@ fn patch_line_range(content: &str, start_line: usize, end_line: usize, new_text:
 }
 
 /// Execute a single tool and return (result_string, optional_memory_op).
+/// The three session-scoped handles of the durable-context layer.
+///
+/// Built once per session, not per turn. The fact store would survive either way
+/// (it is SQLite on disk), but the checkpoint stack and the session trace are
+/// in-memory: rebuilding them each turn would mean `undo_turn` could never reach
+/// past the current turn and no session would ever accumulate enough trace to
+/// distil. Constructed in one place so all four channels agree.
+#[derive(Clone, Default)]
+pub struct DurableContext {
+    pub facts: Option<Arc<FactStore>>,
+    pub checkpoints: Option<Arc<Mutex<Checkpoints>>>,
+    pub trajectory: Option<Arc<Mutex<Trajectory>>>,
+}
+
+impl DurableContext {
+    /// Build from settings. A store that fails to open is logged and left `None`:
+    /// the agent runs without that mechanism rather than refusing to start, which
+    /// is the same failure policy the rest of this layer uses.
+    pub fn new(settings: &crate::config::loader::Settings, memory_file: &str, workdir: &str) -> Self {
+        let facts = if settings.facts_enabled {
+            let path = crate::config::loader::resolve_data_path(memory_file, &settings.facts_file);
+            match FactStore::open(&path) {
+                Ok(store) => Some(Arc::new(store)),
+                Err(e) => {
+                    warn!(error = %e, path = %path, "Could not open the fact store; running without facts");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let checkpoints = if settings.checkpoints_enabled {
+            Some(Arc::new(Mutex::new(Checkpoints::new(workdir))))
+        } else {
+            None
+        };
+
+        // The trace is cheap and useful on its own ("what did this agent do
+        // today"), so it is always on; `distill_skills` gates only the write.
+        let trajectory = Some(Arc::new(Mutex::new(Trajectory::new(""))));
+
+        Self { facts, checkpoints, trajectory }
+    }
+}
+
+/// The literal string `sonnet.rs` splits the system prompt on for prompt caching.
+///
+/// Everything before it is sent with a cache breakpoint and must be stable across
+/// a session; everything after is re-sent every turn. Changing this without
+/// changing `sonnet.rs::MARKER` disables caching silently — the prompt still
+/// works, it just costs full price on every request.
+const SYSTEM_CACHE_MARKER: &str = "\n\n[MEMORY]\n";
+
+/// Which project a fact belongs to: the working directory's own name.
+///
+/// A scoped read sees its own facts plus the unscoped ones, so a rule learned on
+/// one client's shop never surfaces while working on another's.
+fn fact_scope(wd: &str) -> String {
+    std::path::Path::new(wd)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// Char-safe prefix for a tool's own status line.
+pub(crate) fn truncate_for_report(s: &str, max: usize) -> String {
+    if s.chars().count() <= max { s.to_string() } else { s.chars().take(max).collect() }
+}
+
+/// Record a path's pre-state before a mutating tool touches it.
+///
+/// Called on entry to the arm rather than immediately before the write, so a
+/// tool that fails halfway still leaves an undo point. Recording a file that
+/// ends up unchanged is free: undo then restores identical bytes.
+fn snapshot(store: Option<&Arc<Mutex<Checkpoints>>>, paths: &[&str]) {
+    let Some(cp) = store else { return };
+    // A poisoned lock means an earlier turn panicked mid-record. Recovering is
+    // right here: losing every future undo point is a worse outcome than a
+    // possibly-incomplete checkpoint.
+    let mut cp = cp.lock().unwrap_or_else(|e| e.into_inner());
+    for p in paths {
+        if !p.is_empty() {
+            cp.record(p);
+        }
+    }
+}
+
 async fn execute_tool(
     tool_name: &str,
     input: &serde_json::Value,
@@ -1554,14 +2033,7 @@ async fn execute_tool(
     let telegram_bot_token = cfg.telegram_bot_token.as_str();
 
     // Resolve ~ to home directory
-    let work_dir = if working_directory.is_empty() || working_directory == "~" {
-        std::env::var("HOME").unwrap_or_default()
-    } else if working_directory.starts_with("~/") {
-        let home = std::env::var("HOME").unwrap_or_default();
-        format!("{}/{}", home, &working_directory[2..])
-    } else {
-        working_directory.to_string()
-    };
+    let work_dir = crate::config::loader::expand_home(working_directory);
     let wd = if work_dir.is_empty() { None } else { Some(work_dir.as_str()) };
 
     let result = match tool_name {
@@ -1660,6 +2132,7 @@ async fn execute_tool(
             let raw_path = input["path"].as_str().unwrap_or("");
             let path = resolve_path(raw_path, wd);
             let path = path.as_str();
+            snapshot(cfg.checkpoints.as_ref(), &[path]);
             if !is_write_safe(path) {
                 format!("Error: writing to {} is blocked for safety.", path)
             } else {
@@ -1681,6 +2154,7 @@ async fn execute_tool(
             let raw_path = input["path"].as_str().unwrap_or("");
             let path = resolve_path(raw_path, wd);
             let path = path.as_str();
+            snapshot(cfg.checkpoints.as_ref(), &[path]);
             if !is_write_safe(path) {
                 format!("Error: writing to {} is blocked for safety.", path)
             } else {
@@ -1726,6 +2200,7 @@ async fn execute_tool(
             let raw_path = input["path"].as_str().unwrap_or("");
             let path = resolve_path(raw_path, wd);
             let path = path.as_str();
+            snapshot(cfg.checkpoints.as_ref(), &[path]);
             if !is_write_safe(path) {
                 format!("Error: writing to {} is blocked for safety.", path)
             } else {
@@ -1919,7 +2394,7 @@ async fn execute_tool(
         "plan_file_changes" => {
             let changes = match input["changes"].as_array() {
                 Some(a) if !a.is_empty() => a.clone(),
-                _ => return Ok((format!("Error: 'changes' array is required."), None)),
+                _ => return Ok(("Error: 'changes' array is required.".to_string(), None)),
             };
             let mut plan = String::from("**Planned file changes:**\n\n");
             for change in &changes {
@@ -1950,7 +2425,7 @@ async fn execute_tool(
             if content.is_empty() {
                 return Ok(("Error: content is required.".to_string(), None));
             }
-            let base = wd.as_deref().unwrap_or(".");
+            let base = wd.unwrap_or(".");
             let axium_dir = std::path::Path::new(base).join(".axium");
             let _ = std::fs::create_dir_all(&axium_dir);
             let knowledge_path = axium_dir.join("knowledge.md");
@@ -2097,6 +2572,7 @@ async fn execute_tool(
         "delete_file" => {
             let path = input["path"].as_str().unwrap_or("");
             let full_path = resolve_path(path, wd);
+            snapshot(cfg.checkpoints.as_ref(), &[full_path.as_str()]);
             if !is_write_safe(&full_path) {
                 format!("Error: deleting {} is blocked for safety.", full_path)
             } else {
@@ -2121,6 +2597,7 @@ async fn execute_tool(
             let destination = input["destination"].as_str().unwrap_or("");
             let src = resolve_path(source, wd);
             let dst = resolve_path(destination, wd);
+            snapshot(cfg.checkpoints.as_ref(), &[src.as_str(), dst.as_str()]);
             if !is_write_safe(&src) || !is_write_safe(&dst) {
                 format!("Error: move blocked for safety ({} → {})", src, dst)
             } else if !std::path::Path::new(&src).exists() {
@@ -2152,7 +2629,7 @@ async fn execute_tool(
             let symbol = input["symbol"].as_str().unwrap_or("");
             let search_dir = input["path"].as_str()
                 .map(|p| resolve_path(p, wd))
-                .unwrap_or_else(|| wd.as_deref().unwrap_or(".").to_string());
+                .unwrap_or_else(|| wd.unwrap_or(".").to_string());
             if symbol.is_empty() {
                 "Error: symbol is required.".to_string()
             } else {
@@ -2164,7 +2641,7 @@ async fn execute_tool(
             let new_name = input["new_name"].as_str().unwrap_or("");
             let search_dir = input["path"].as_str()
                 .map(|p| resolve_path(p, wd))
-                .unwrap_or_else(|| wd.as_deref().unwrap_or(".").to_string());
+                .unwrap_or_else(|| wd.unwrap_or(".").to_string());
             if old_name.is_empty() || new_name.is_empty() {
                 "Error: old_name and new_name are required.".to_string()
             } else {
@@ -2174,7 +2651,7 @@ async fn execute_tool(
         "get_dependency_graph" => {
             let path = input["path"].as_str().unwrap_or("");
             let direction = input["direction"].as_str().unwrap_or("both");
-            let working = wd.as_deref().unwrap_or(".");
+            let working = wd.unwrap_or(".");
             if path.is_empty() {
                 "Error: path is required.".to_string()
             } else {
@@ -2258,6 +2735,123 @@ async fn execute_tool(
                 _ => "Rollback attempted but git commands had issues. Check working directory state.".to_string(),
             }
         }
+        "undo_turn" => {
+            match cfg.checkpoints.as_ref() {
+                None => "Error: checkpoints are not enabled in this session".to_string(),
+                Some(cp) => {
+                    let mut cp = cp.lock().unwrap_or_else(|e| e.into_inner());
+                    if input["action"].as_str() == Some("list") {
+                        let rows = cp.list();
+                        if rows.is_empty() {
+                            "No checkpoints recorded.".to_string()
+                        } else {
+                            rows.iter()
+                                .map(|r| format!("{}  {} file(s)  {}s ago  {}",
+                                                 r.id, r.files, r.age_s, r.label))
+                                .collect::<Vec<_>>()
+                                .join("
+")
+                        }
+                    } else {
+                        let res = cp.undo(input["checkpoint_id"].as_str().unwrap_or(""));
+                        if !res.error.is_empty() {
+                            format!("Error: {}", res.error)
+                        } else {
+                            let mut parts: Vec<String> = Vec::new();
+                            if !res.restored.is_empty() {
+                                parts.push(format!("Restored {}: {}",
+                                    res.restored.len(), res.restored.join(", ")));
+                            }
+                            if !res.deleted.is_empty() {
+                                parts.push(format!("Removed {} file(s) this turn created: {}",
+                                    res.deleted.len(), res.deleted.join(", ")));
+                            }
+                            if !res.failed.is_empty() {
+                                parts.push(format!("FAILED on {}: {}",
+                                    res.failed.len(), res.failed.join("; ")));
+                            }
+                            if parts.is_empty() {
+                                "Checkpoint was empty - nothing to undo.".to_string()
+                            } else {
+                                parts.join("
+")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "remember_fact" => {
+            match cfg.facts.as_ref() {
+                None => "Error: the fact store is not available in this session".to_string(),
+                Some(store) => {
+                    let value = input["value"].as_str().unwrap_or("").trim();
+                    if value.is_empty() {
+                        "Error: value is required".to_string()
+                    } else {
+                        let importance = input["importance"].as_f64().unwrap_or(0.7);
+                        match store.remember(
+                            value,
+                            input["type"].as_str().unwrap_or("note"),
+                            input["key"].as_str().unwrap_or(""),
+                            importance,
+                            &fact_scope(&work_dir),
+                            "tool",
+                        ) {
+                            Ok(Some(id)) => format!("Remembered (#{}, importance {:.2}): {}",
+                                                    id, importance, truncate_for_report(value, 160)),
+                            Ok(None) => "Nothing to remember: the value was empty after sanitising."
+                                .to_string(),
+                            Err(e) => format!("Error storing fact: {}", e),
+                        }
+                    }
+                }
+            }
+        }
+        "recall" => {
+            match cfg.facts.as_ref() {
+                None => "Error: the fact store is not available in this session".to_string(),
+                Some(store) => {
+                    let scope = fact_scope(&work_dir);
+                    let limit = input["limit"].as_u64().unwrap_or(10).min(30) as usize;
+                    let query = input["query"].as_str().unwrap_or("").trim();
+                    let rows = if query.is_empty() {
+                        store.all(Some(&scope), limit)
+                    } else {
+                        store.search(query, Some(&scope), limit)
+                    };
+                    match rows {
+                        Err(e) => format!("Error searching facts: {}", e),
+                        Ok(rows) if rows.is_empty() => "No matching facts.".to_string(),
+                        Ok(rows) => rows.iter()
+                            .map(|f| format!("[{} {:.2}] {}: {}", f.kind, f.importance, f.key, f.value))
+                            .collect::<Vec<_>>()
+                            .join("
+"),
+                    }
+                }
+            }
+        }
+        "learn_project" => {
+            brain::ensure_brain_dir(&work_dir);
+            let overview = brain::build_overview(&work_dir, |root| {
+                tools::project::scan_project(root, 4)
+            });
+            let body = input["profile"].as_str().unwrap_or("").trim();
+            let mut bits = vec![format!(
+                "Overview {} ({} chars)",
+                if overview.is_empty() { "unavailable" } else { "rebuilt" },
+                overview.len()
+            )];
+            if !body.is_empty() {
+                bits.push(if brain::write_profile(&work_dir, body) {
+                    "profile written".to_string()
+                } else {
+                    "profile left alone (a human-written PROFILE.md exists)".to_string()
+                });
+            }
+            format!("{}.", bits.join(". "))
+        }
         _ => format!("Unknown tool: {}", tool_name),
     };
 
@@ -2293,17 +2887,17 @@ fn run_subagent_task<'a>(
     };
 
     let sub_sonnet = super::sonnet::SonnetClient::new(
-        &cfg.anthropic_key, &cfg.openai_key,
+        &cfg.keys,
         &sub_model, &sub_provider,
         8192, Arc::clone(&cfg.http),
     );
     let sub_classifier = super::classifier::Classifier::new(
-        &cfg.anthropic_key, &cfg.openai_key,
+        &cfg.keys,
         &cfg.classifier_model, &cfg.classifier_provider,
         Arc::clone(&cfg.http),
     );
     let sub_compactor = super::compactor::Compactor::new(
-        &cfg.anthropic_key, &cfg.openai_key,
+        &cfg.keys,
         &cfg.compactor_model, &cfg.compactor_provider,
         Arc::clone(&cfg.http),
     );
@@ -2349,7 +2943,9 @@ fn run_subagent_task<'a>(
     match run_agent_turn(
         &sub_classifier, &sub_sonnet, &sub_compactor,
         &mut sub_history, &sub_memory, sub_soul, "",
-        task_db, &sub_cfg, &sub_tx, false,
+        // A sub-agent gets no skills and no plan: it is handed a self-contained
+        // task and has no conversation to select either against.
+        task_db, &sub_cfg, &sub_tx, false, "",
     ).await {
         Ok((output, _memory_ops, _compacted)) => {
             drop(sub_tx); // close channel so bridge drains and exits
@@ -2570,16 +3166,13 @@ pub(crate) fn strip_think_tags(s: &str) -> String {
     let mut out = s.to_string();
     // Strip both <think>...</think> and <thinking>...</thinking> variants
     for (open, close) in &[("<thinking>", "</thinking>"), ("<think>", "</think>")] {
-        loop {
-            if let Some(start) = out.find(open) {
-                if let Some(end_rel) = out[start..].find(close) {
-                    out.replace_range(start..start + end_rel + close.len(), "");
-                } else {
+        while let Some(start) = out.find(open) {
+            match out[start..].find(close) {
+                Some(end_rel) => out.replace_range(start..start + end_rel + close.len(), ""),
+                None => {
                     out.truncate(start); // unclosed tag — drop to end
                     break;
                 }
-            } else {
-                break;
             }
         }
     }
@@ -2604,7 +3197,7 @@ fn extract_text_from_api_msg(m: &serde_json::Value) -> String {
                 "tool_use" => Some(format!(
                     "[tool_call: {}({})]",
                     b["name"].as_str().unwrap_or("?"),
-                    b["input"].to_string()
+                    b["input"]
                 )),
                 "tool_result" => {
                     let content = if let Some(arr) = b["content"].as_array() {
@@ -2698,16 +3291,13 @@ pub(crate) fn compress_tool_log(s: &str) -> String {
 /// inflates context on every subsequent turn without adding reasoning value.
 pub(crate) fn strip_tool_log(s: &str) -> String {
     let mut out = s.to_string();
-    loop {
-        if let Some(start) = out.find("<tool_log>") {
-            if let Some(end_rel) = out[start..].find("</tool_log>") {
-                out.replace_range(start..start + end_rel + 11, "");
-            } else {
+    while let Some(start) = out.find("<tool_log>") {
+        match out[start..].find("</tool_log>") {
+            Some(end_rel) => out.replace_range(start..start + end_rel + 11, ""),
+            None => {
                 out.truncate(start); // unclosed tag — drop to end
                 break;
             }
-        } else {
-            break;
         }
     }
     out.trim_end().to_string()
@@ -2829,11 +3419,8 @@ fn detect_test_command(working_dir: &str) -> Option<(String, Vec<String>)> {
 fn resolve_path(path: &str, wd: Option<&str>) -> String {
     if path.starts_with('/') {
         path.to_string()
-    } else if path == "~" {
-        std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
-    } else if path.starts_with("~/") {
-        let home = std::env::var("HOME").unwrap_or_default();
-        format!("{}/{}", home, &path[2..])
+    } else if path.starts_with('~') {
+        crate::config::loader::expand_home(path)
     } else if let Some(w) = wd {
         format!("{}/{}", w, path)
     } else {
@@ -3102,3 +3689,430 @@ fn collect_files_with_symbol(
     }
 }
 
+
+
+#[cfg(test)]
+mod path_guard_tests {
+    use super::*;
+
+    /// The regression that started this: on Windows `canonicalize` returns an
+    /// extended-length path, so a raw prefix comparison against $HOME matched
+    /// nothing and every write was refused. It never surfaced as an error the
+    /// user would see - the model falls back to the shell and the edit lands a
+    /// few turns later - so it showed up as a benchmark score, not a bug report.
+    #[test]
+    fn writes_inside_a_temp_dir_are_allowed() {
+        let dir = std::env::temp_dir().join("axium_guard_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("scratch.txt");
+        std::fs::write(&f, b"x").unwrap();
+
+        assert!(is_write_safe(f.to_str().unwrap()),
+                "writing to a plain temp file must be allowed");
+        assert!(is_write_safe(dir.join("new_file.txt").to_str().unwrap()),
+                "creating a new file in an existing directory must be allowed");
+        assert!(is_read_safe(f.to_str().unwrap()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An extended-length path and a plain one name the same file and must be
+    /// judged the same way.
+    #[test]
+    fn the_extended_length_prefix_is_stripped() {
+        let plain = std::path::Path::new("C:/Users/someone/project/a.rs");
+        let extended = std::path::Path::new(r"\\?\C:\Users\someone\project\a.rs");
+        assert_eq!(normalise_for_compare(plain), normalise_for_compare(extended));
+    }
+
+    #[test]
+    fn unc_paths_normalise_to_a_double_slash() {
+        let unc = std::path::Path::new(r"\\?\UNC\server\share\f.txt");
+        assert_eq!(normalise_for_compare(unc), "//server/share/f.txt");
+    }
+
+    /// Sensitive locations must still be refused. The POSIX list cannot match a
+    /// drive-letter path, so once the prefix bug was fixed the guard protected
+    /// nothing at all on Windows until the Windows list was added.
+    #[test]
+    #[cfg(windows)]
+    fn windows_system_directories_are_refused() {
+        for p in [r"C:\Windows\System32\drivers\etc\hosts", r"C:\Program Files"] {
+            if std::path::Path::new(p).exists() {
+                assert!(!is_write_safe(p), "{} must not be writable", p);
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn posix_system_directories_are_refused() {
+        assert!(!is_write_safe("/etc/passwd"));
+    }
+}
+
+#[cfg(test)]
+mod durable_context_tests {
+    use super::*;
+
+    // The tool ARMS need a live TurnConfig and an async runtime; their behaviour
+    // is covered by the unit tests in agent::checkpoints, memory::facts and
+    // agent::brain, which is where the logic actually lives. What is worth
+    // asserting here is the glue those arms depend on, and the schema parity
+    // that makes the Rust and Python benchmarks comparable.
+
+    #[test]
+    fn fact_scope_is_the_project_folder_name() {
+        assert_eq!(fact_scope("/home/nikos/projects/shop"), "shop");
+        assert_eq!(fact_scope(r"C:\xampp\htdocs\axium"), "axium");
+    }
+
+    #[test]
+    fn fact_scope_of_an_empty_or_root_dir_is_unscoped() {
+        // Unscoped facts are visible from every project, which is the right
+        // fallback: better global than silently attached to the wrong project.
+        assert_eq!(fact_scope(""), "");
+        assert_eq!(fact_scope("/"), "");
+    }
+
+    #[test]
+    fn fact_scope_ignores_a_trailing_separator() {
+        assert_eq!(fact_scope("/home/nikos/shop/"), "shop");
+    }
+
+    #[test]
+    fn truncate_for_report_is_char_safe() {
+        assert_eq!(truncate_for_report("abc", 10), "abc");
+        assert_eq!(truncate_for_report("abcdef", 3), "abc");
+        let greek = "καταστημα".repeat(40);
+        assert_eq!(truncate_for_report(&greek, 5).chars().count(), 5);
+    }
+
+    #[test]
+    fn snapshot_without_a_store_is_a_no_op() {
+        // A sub-agent is given checkpoints: None. Recording must degrade
+        // silently rather than panicking the turn.
+        snapshot(None, &["some/path.py"]);
+        snapshot(None, &[""]);
+    }
+
+    #[test]
+    fn snapshot_records_through_the_shared_handle() {
+        let dir = std::env::temp_dir().join(format!("axium-snap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("app.py");
+        std::fs::write(&target, "ORIGINAL\n").unwrap();
+
+        let mut cp = Checkpoints::new(dir.to_str().unwrap());
+        cp.begin("turn");
+        let handle = Arc::new(Mutex::new(cp));
+
+        snapshot(Some(&handle), &[target.to_str().unwrap()]);
+        std::fs::write(&target, "CHANGED\n").unwrap();
+
+        let mut guard = handle.lock().unwrap();
+        guard.commit();
+        let res = guard.undo("");
+        assert!(res.ok, "{res:?}");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "ORIGINAL\n");
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snapshot_skips_empty_paths() {
+        let dir = std::env::temp_dir().join(format!("axium-snap-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cp = Checkpoints::new(dir.to_str().unwrap());
+        cp.begin("turn");
+        let handle = Arc::new(Mutex::new(cp));
+
+        // A tool arm reached with no "path" argument passes "" through.
+        snapshot(Some(&handle), &["", ""]);
+        assert_eq!(handle.lock().unwrap().touched_count(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The four new tools must exist in BOTH builds under the same names, or the
+    /// two benchmarks are measuring different agents.
+    #[test]
+    fn the_new_tools_are_registered() {
+        let names: Vec<String> = crate::agent::sonnet::build_tools()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        for expected in ["undo_turn", "remember_fact", "recall", "learn_project"] {
+            assert!(names.contains(&expected.to_string()), "missing tool: {expected}");
+        }
+    }
+
+    #[test]
+    fn undo_turn_and_recall_are_in_the_minimal_set() {
+        assert!(crate::agent::sonnet::MINIMAL_TOOL_NAMES.contains(&"undo_turn"));
+        assert!(crate::agent::sonnet::MINIMAL_TOOL_NAMES.contains(&"recall"));
+    }
+
+    #[test]
+    fn every_tool_schema_is_a_well_formed_object() {
+        for t in crate::agent::sonnet::build_tools() {
+            assert_eq!(t.input_schema["type"], "object", "bad schema for {}", t.name);
+            assert!(!t.description.is_empty(), "no description for {}", t.name);
+        }
+    }
+
+    #[test]
+    fn tool_names_are_unique() {
+        // A duplicate name silently shadows one schema at dispatch time.
+        let mut names: Vec<String> = crate::agent::sonnet::build_tools()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        let total = names.len();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), total, "duplicate tool name registered");
+    }
+}
+
+#[cfg(test)]
+mod wiring_tests {
+    use super::*;
+
+    /// The exact marker `sonnet.rs` splits the system prompt on for prompt caching.
+    const MARKER: &str = SYSTEM_CACHE_MARKER;
+
+    /// Rebuild the system prompt the way `run_agent_turn` does.
+    ///
+    /// Duplicating the format string in a test would let the two drift silently,
+    /// so this asserts on the *properties* that matter — what sits above and below
+    /// the cache breakpoint — using the same helper pieces the real code uses.
+    fn assemble(soul: &str, brain_block: &str, memory: &str, project: &str,
+                facts_block: &str, volatile: &str) -> String {
+        let cached_head = format!("{soul}\n\n[TOOL EFFICIENCY]\n...\n{brain_block}");
+        format!(
+            "{}{}{}\n{}{}{}",
+            cached_head.trim_end(), SYSTEM_CACHE_MARKER, memory, project, facts_block, volatile
+        )
+    }
+
+    #[test]
+    fn the_brain_sits_above_the_cache_breakpoint() {
+        // Stable for a whole session, so it belongs in the cached prefix.
+        let p = assemble("SOUL", "\n\n[PROJECT BRAIN]\nStack: Python.", "mem", "proj", "", "");
+        let split = p.find(MARKER).expect("marker present");
+        assert!(p.find("[PROJECT BRAIN]").unwrap() < split, "brain must be cached:\n{p}");
+    }
+
+    #[test]
+    fn facts_skills_and_plan_sit_below_the_cache_breakpoint() {
+        // All three change per message. Above the marker they would invalidate the
+        // entire cached prefix on every turn that learned or selected something.
+        let p = assemble(
+            "SOUL", "", "mem", "proj",
+            "\n[FACTS]\n- (rule) Free over 50.\n",
+            "\n[LOADED SKILLS]\nship it\n\n[PLAN]\n1. a\n2. b\n",
+        );
+        let split = p.find(MARKER).expect("marker present");
+        for block in ["[FACTS]", "[LOADED SKILLS]", "[PLAN]"] {
+            assert!(p.find(block).unwrap() > split, "{block} must be volatile:\n{p}");
+        }
+    }
+
+    #[test]
+    fn the_marker_survives_assembly() {
+        // If the marker is ever reformatted, `sonnet.rs` silently stops splitting
+        // and every request pays full price for the whole prompt.
+        assert!(assemble("SOUL", "", "mem", "", "", "").contains(MARKER));
+    }
+
+    #[test]
+    fn tool_names_are_parsed_out_of_the_tool_log() {
+        // The trace records which tools ran; the log is line-oriented text.
+        let log = "read_file: shop/pricing.py\npatch_file: shop/pricing.py\nrun_command: pytest";
+        let names: Vec<String> = log
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .map(|s| s.trim_matches(|c: char| !c.is_alphanumeric() && c != '_').to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(names, vec!["read_file", "patch_file", "run_command"]);
+    }
+
+    #[test]
+    fn an_empty_tool_log_yields_no_names() {
+        let names: Vec<String> = ""
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn a_failed_turn_produces_a_gotcha_worth_storing() {
+        // mine_turn_failure needs a live TurnConfig; what is worth asserting here
+        // is that the shape it feeds the store is one the store will accept.
+        let g = crate::memory::facts::mine_failure(
+            "run the migration",
+            "ConnectionError: refused by host",
+            "",
+        )
+        .expect("a concrete error is mineable");
+        assert_eq!(g.kind, "gotcha");
+        assert!(g.importance > 0.5, "a gotcha must outrank background noise");
+
+        let store = crate::memory::facts::FactStore::open_in_memory().unwrap();
+        let id = store
+            .remember(&g.value, &g.kind, &g.key, g.importance, "shop", "failure")
+            .unwrap();
+        assert!(id.is_some());
+        assert!(store.render(Some("shop")).unwrap().contains("refused by host"));
+    }
+
+    #[test]
+    fn the_changed_set_comes_from_the_checkpoint() {
+        // `after_turn` derives "what did this turn change" from the checkpoint
+        // rather than tracking it twice.
+        let dir = std::env::temp_dir().join(format!("axium-changed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.py"), "x\n").unwrap();
+
+        let mut cp = Checkpoints::new(dir.to_str().unwrap());
+        cp.begin("turn");
+        cp.record(dir.join("a.py").to_str().unwrap());
+        cp.record(dir.join("new.py").to_str().unwrap());
+        cp.commit();
+
+        let mut files = cp.last_files();
+        files.sort();
+        assert_eq!(files, vec!["a.py".to_string(), "new.py".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_read_only_turn_has_an_empty_changed_set() {
+        let dir = std::env::temp_dir().join(format!("axium-ro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cp = Checkpoints::new(dir.to_str().unwrap());
+        cp.begin("read only");
+        cp.commit();
+        assert!(cp.last_files().is_empty(), "no journal entry should follow");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn distillation_gates_hold_end_to_end() {
+        let dir = std::env::temp_dir().join(format!("axium-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut t = Trajectory::new(dir.to_str().unwrap());
+
+        t.record("look around", &["read_file".into()], &[], "read", None);
+        assert!(!t.should_distill(), "one thin turn is not a workflow");
+
+        t.record("scan it", &["scan_project".into()], &[], "scanned", None);
+        t.record("fix it", &["patch_file".into()], &["a.py".into()], "patched", None);
+        t.record("test it", &["run_command".into()], &[], "green", None);
+        assert!(t.should_distill(), "four tools and a real change should qualify");
+
+        t.distilled = true;
+        assert!(!t.should_distill(), "one distillation per session");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Build a `TurnConfig` from the loaded config and shared state.
+///
+/// Every channel needs one of these and they differ in only a handful of fields,
+/// so each site used to spell out all ~35. That is how the seven drifted copies
+/// of tilde expansion happened, and how each new field became a five-file edit.
+/// Callers now build from this and override what is actually theirs:
+///
+/// ```ignore
+/// TurnConfig { mode: "skills".into(), ..base_turn_config(&cfg, &state) }
+/// ```
+pub fn base_turn_config(
+    cfg: &crate::config::loader::Config,
+    state: &Arc<crate::tui::server::AppState>,
+) -> TurnConfig {
+    TurnConfig {
+        // Interactive turns do not pay for benchmark bookkeeping; `--once` opts in.
+        meter: None,
+        facts: state.durable.facts.clone(),
+        checkpoints: state.durable.checkpoints.clone(),
+        trajectory: state.durable.trajectory.clone(),
+        brain_enabled: cfg.settings.brain_enabled,
+        planner_enabled: cfg.settings.planner_enabled,
+        distill_skills: cfg.settings.distill_skills,
+        skills_dir: cfg.settings.skills_dir.clone(),
+        token_limit: cfg.settings.token_limit,
+        terminal_timeout: cfg.settings.terminal_timeout_secs,
+        max_output_chars: cfg.settings.max_output_chars,
+        max_tool_iterations: cfg.settings.max_tool_iterations,
+        max_retries: cfg.settings.max_retries,
+        sudo_password: String::new(),
+        working_directory: crate::config::loader::expand_home(&cfg.settings.working_directory),
+        smtp_host: cfg.settings.smtp_host.clone(),
+        smtp_port: cfg.settings.smtp_port,
+        smtp_user: cfg.settings.smtp_user.clone(),
+        smtp_password: cfg.settings.smtp_password.clone(),
+        smtp_from: cfg.settings.smtp_from.clone(),
+        telegram_bot_token: cfg.settings.telegram_bot_token.clone(),
+        conversation_logging: cfg.settings.conversation_logging,
+        http: Arc::clone(&state.http),
+        keys: cfg.api_keys.as_set(),
+        primary_model: cfg.models.primary.clone(),
+        primary_provider: cfg.models.primary_provider.clone(),
+        subagent_depth: 0,
+        continuation_model: cfg.models.continuation.clone(),
+        continuation_provider: cfg.models.continuation_provider.clone(),
+        classifier_model: cfg.models.classifier.clone(),
+        classifier_provider: cfg.models.classifier_provider.clone(),
+        review_model: cfg.models.review.clone(),
+        review_provider: cfg.models.review_provider.clone(),
+        compactor_model: cfg.models.compactor.clone(),
+        compactor_provider: cfg.models.compactor_provider.clone(),
+        mode: cfg.settings.mode_or_default(),
+        plugin_manager: Some(Arc::clone(&state.plugin_manager)),
+        compaction_threshold: cfg.settings.compaction_threshold,
+        thinking_effort: cfg.settings.thinking_effort.clone(),
+        fallback_model: cfg.models.fallback.clone(),
+        fallback_provider: cfg.models.fallback_provider.clone(),
+        conv_logger: None,
+        chat_db: Arc::clone(&state.chat_db),
+    }
+}
+
+/// The project context block for a working directory.
+pub fn build_project_context_for(workdir: &str) -> String {
+    crate::tools::project::build_project_context(workdir)
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::*;
+
+    #[test]
+    fn truncating_a_tool_result_never_splits_a_character() {
+        // The exact shape that panicked the agent: a table whose box-drawing
+        // character straddles the cut. `&s[..1000]` panics here.
+        let table = format!("{}│{}", "x".repeat(998), "y".repeat(500));
+        let out = truncate_for_report(&table, 1000);
+        assert_eq!(out.chars().count(), 1000);
+        // The point is that the box character survived whole rather than being
+        // cut in half — byte-slicing at 1000 lands inside it and panics.
+        assert!(out.contains('│'));
+        assert_eq!(out.chars().nth(998), Some('│'));
+    }
+
+    #[test]
+    fn short_and_multibyte_results_pass_through() {
+        assert_eq!(truncate_for_report("short", 1000), "short");
+        let greek = "καταστημα".repeat(300);
+        assert_eq!(truncate_for_report(&greek, 1000).chars().count(), 1000);
+    }
+}

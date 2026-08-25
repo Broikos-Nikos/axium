@@ -141,33 +141,35 @@ pub async fn run(state: Arc<AppState>) {
         let (sonnet, compactor, classifier, soul, turn_cfg, project_ctx, memory_file) = {
             let cfg = state.config.read().await;
             let wd = &cfg.settings.working_directory;
-            let resolved_wd = if wd.is_empty() || wd == "~" {
-                std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
-            } else if wd.starts_with("~/") {
-                let home = std::env::var("HOME").unwrap_or_default();
-                format!("{}/{}", home, &wd[2..])
-            } else {
-                wd.clone()
-            };
+            let resolved_wd = crate::config::loader::expand_home(wd);
             let ctx = crate::tui::server::get_project_context(&state, &resolved_wd).await;
             (
                 SonnetClient::new(
-                    &cfg.api_keys.anthropic, &cfg.api_keys.openai,
+                    &cfg.api_keys.as_set(),
                     &cfg.models.primary, &cfg.models.primary_provider,
                     cfg.settings.max_tokens, Arc::clone(&state.http),
                 ),
                 Compactor::new(
-                    &cfg.api_keys.anthropic, &cfg.api_keys.openai,
+                    &cfg.api_keys.as_set(),
                     &cfg.models.compactor, &cfg.models.compactor_provider,
                     Arc::clone(&state.http),
                 ),
                 Classifier::new(
-                    &cfg.api_keys.anthropic, &cfg.api_keys.openai,
+                    &cfg.api_keys.as_set(),
                     &cfg.models.classifier, &cfg.models.classifier_provider,
                     Arc::clone(&state.http),
                 ),
                 crate::config::loader::load_soul(&cfg.agent.soul),
                 TurnConfig {
+                // Interactive turns do not pay for benchmark bookkeeping.
+                meter: None,
+                facts: state.durable.facts.clone(),
+                checkpoints: state.durable.checkpoints.clone(),
+                trajectory: state.durable.trajectory.clone(),
+                brain_enabled: cfg.settings.brain_enabled,
+                planner_enabled: cfg.settings.planner_enabled,
+                distill_skills: cfg.settings.distill_skills,
+                skills_dir: cfg.settings.skills_dir.clone(),
                     token_limit: cfg.settings.token_limit,
                     terminal_timeout: cfg.settings.terminal_timeout_secs,
                     max_output_chars: cfg.settings.max_output_chars,
@@ -183,8 +185,7 @@ pub async fn run(state: Arc<AppState>) {
                     telegram_bot_token: cfg.settings.telegram_bot_token.clone(),
                     conversation_logging: cfg.settings.conversation_logging,
                     http: Arc::clone(&state.http),
-                    anthropic_key: cfg.api_keys.anthropic.clone(),
-                    openai_key: cfg.api_keys.openai.clone(),
+                    keys: cfg.api_keys.as_set(),
                     primary_model: cfg.models.primary.clone(),
                     primary_provider: cfg.models.primary_provider.clone(),
                     subagent_depth: 0,

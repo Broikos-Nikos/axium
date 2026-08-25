@@ -52,7 +52,16 @@ async fn main() -> Result<()> {
         }
     }
 
-    if cfg.api_keys.anthropic.is_empty() && cfg.api_keys.openai.is_empty() {
+    if cfg.api_keys.deepseek.is_empty() {
+        if let Ok(key) = std::env::var("DEEPSEEK_API_KEY") {
+            if !key.is_empty() {
+                info!("Using DEEPSEEK_API_KEY from environment");
+                cfg.api_keys.deepseek = key;
+            }
+        }
+    }
+
+    if cfg.api_keys.anthropic.is_empty() && cfg.api_keys.openai.is_empty() && cfg.api_keys.deepseek.is_empty() {
         error!("No API keys configured in config.json");
         eprintln!("Error: No API keys configured. Add at least one API key then run again.");
         return Err(anyhow::anyhow!("No API keys configured. Add at least one API key to config.json then restart."));
@@ -102,6 +111,21 @@ async fn main() -> Result<()> {
 
     let project_context_cache = std::sync::Arc::new(RwLock::new(None));
 
+    // The durable-context layer, built once for the process. Its checkpoint stack
+    // and session trace are in-memory, so they belong to the session rather than
+    // to a turn.
+    let durable = {
+        let raw_wd = cfg.settings.working_directory.clone();
+        let wd = if raw_wd.is_empty() || raw_wd == "~" {
+            std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
+        } else if let Some(rest) = raw_wd.strip_prefix("~/") {
+            format!("{}/{}", std::env::var("HOME").unwrap_or_default(), rest)
+        } else {
+            raw_wd
+        };
+        agent::router::DurableContext::new(&cfg.settings, &memory_path, &wd)
+    };
+
     let state = Arc::new(tui::server::AppState {
         config: RwLock::new(cfg),
         config_path: config_path.to_string(),
@@ -118,22 +142,24 @@ async fn main() -> Result<()> {
         conv_log_buffer: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         flush_notify: Arc::new(tokio::sync::Notify::new()),
         task_file_buffers: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        durable,
     });
 
     // Spawn background file watcher for the configured working directory
     {
         let raw_wd = state.config.read().await.settings.working_directory.clone();
-        let working_dir = if raw_wd.is_empty() || raw_wd == "~" {
-            std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
-        } else if raw_wd.starts_with("~/") {
-            let home = std::env::var("HOME").unwrap_or_default();
-            format!("{}/{}", home, &raw_wd[2..])
-        } else {
-            raw_wd
-        };
+        let working_dir = crate::config::loader::expand_home(&raw_wd);
         watcher::spawn_watcher(working_dir, broadcast_tx, project_context_cache);
     }
     worker::spawn_worker(state.clone());
+
+    // One-shot mode: run a single turn, print one JSON line, exit. This is what
+    // makes the binary drivable by a benchmark harness; every other channel is a
+    // conversation that never returns.
+    if let Some(once_args) = channels::once::OnceArgs::from_env() {
+        let code = channels::once::run(state, once_args).await?;
+        std::process::exit(code);
+    }
 
     // Default mode: interactive CLI REPL. Pass --server to start the web server instead.
     if !std::env::args().any(|a| a == "--server") {

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::mpsc;
 
-use super::{resolve_provider, Provider};
+use super::{resolve_provider, ApiKeySet, Provider};
 
 /// Token usage data reported by the API.
 #[derive(Debug, Default, Clone, Serialize)]
@@ -51,11 +51,14 @@ static TOOLS_OPENAI: LazyLock<serde_json::Value> = LazyLock::new(|| {
 
 /// Tools included in the minimal set (for "simple" mode).
 /// Excludes heavy scaffolding tools (subagents, task queuing, code intelligence, destructive ops).
-const MINIMAL_TOOL_NAMES: &[&str] = &[
+pub(crate) const MINIMAL_TOOL_NAMES: &[&str] = &[
     "run_command", "read_file", "write_file", "append_file", "patch_file",
     "search_files", "list_directory", "scan_project", "browse_url", "web_search",
     "git_command", "update_memory", "update_user_model", "ask_user", "send_email",
     "send_file", "update_project_knowledge", "search_history",
+    // undo_turn earns its schema even in the minimal set: reverting a turn from
+    // snapshots is one call, and reconstructing the same files by hand is dozens.
+    "undo_turn", "recall",
 ];
 
 fn build_minimal_tools() -> Vec<Tool> {
@@ -91,8 +94,7 @@ static TOOLS_MINIMAL_OPENAI: LazyLock<serde_json::Value> = LazyLock::new(|| {
 });
 
 pub struct SonnetClient {
-    anthropic_key: String,
-    openai_key: String,
+    keys: ApiKeySet,
     model: String,
     provider: Provider,
     max_tokens: usize,
@@ -100,13 +102,18 @@ pub struct SonnetClient {
 }
 
 impl SonnetClient {
-    pub fn new(anthropic_key: &str, openai_key: &str, model: &str, explicit_provider: &str, max_tokens: usize, http: Arc<reqwest::Client>) -> Self {
-        let provider = resolve_provider(model, explicit_provider);
+    /// Which model this client calls. Needed to price a call: the meter records
+    /// the model that actually answered, not the one configured as primary,
+    /// because a fallback swap would otherwise be billed at the wrong rate.
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    pub fn new(keys: &ApiKeySet, model: &str, explicit_provider: &str, max_tokens: usize, http: Arc<reqwest::Client>) -> Self {
         Self {
-            anthropic_key: anthropic_key.to_string(),
-            openai_key: openai_key.to_string(),
+            keys: keys.clone(),
             model: model.to_string(),
-            provider,
+            provider: resolve_provider(model, explicit_provider),
             max_tokens,
             http,
         }
@@ -122,7 +129,7 @@ impl SonnetClient {
 }
 
 /// All tools the agent can use (built once, cached in statics above).
-fn build_tools() -> Vec<Tool> {
+pub(crate) fn build_tools() -> Vec<Tool> {
         vec![
             Tool {
                 name: "run_command".into(),
@@ -383,6 +390,53 @@ fn build_tools() -> Vec<Tool> {
                     "required": ["content"]
                 }),
             },
+            // ── durable-context layer ───────────────────────────────────
+            Tool {
+                name: "undo_turn".into(),
+                description: "Revert file changes from an earlier turn using the snapshots taken before each write: edited files are restored byte-for-byte and files that turn created are removed. Use this when asked to put something back or undo what you just did - it is exact, unlike rewriting the files from memory. action='list' shows what can be undone.".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["undo", "list"], "description": "Default 'undo'" },
+                        "checkpoint_id": { "type": "string", "description": "A specific checkpoint from action='list'. Omit for the most recent." }
+                    }
+                }),
+            },
+            Tool {
+                name: "remember_fact".into(),
+                description: "Store one durable fact with a type and an importance. Use it for a rule, threshold, convention or decision that must still hold many turns from now. Facts are shown to you at the top of every turn and survive compaction, unlike anything said in the conversation.".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "value": { "type": "string", "description": "The fact as one self-contained sentence, with any number stated verbatim" },
+                        "type": { "type": "string", "enum": ["rule", "convention", "decision", "preference", "gotcha", "reference", "note"] },
+                        "key": { "type": "string", "description": "Stable dotted id for dedup, e.g. shipping.free_threshold" },
+                        "importance": { "type": "number", "description": "0.0-1.0. A hard rule or a user correction: 0.9" }
+                    },
+                    "required": ["value"]
+                }),
+            },
+            Tool {
+                name: "recall".into(),
+                description: "Search your durable facts for a rule, threshold or decision. Faster and more precise than search_history. Omit the query to list the most important facts.".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "limit": { "type": "integer", "description": "Default 10, max 30" }
+                    }
+                }),
+            },
+            Tool {
+                name: "learn_project".into(),
+                description: "Rebuild the Project Brain in .axium/: refresh the annotated overview and optionally write PROFILE.md. Run this once on an unfamiliar project so later sessions start oriented instead of re-exploring.".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "profile": { "type": "string", "description": "Optional PROFILE.md body: stack, entry points, key files, conventions, deploy target" }
+                    }
+                }),
+            },
             Tool {
                 name: "set_autonomous".into(),
                 description: "Enable or disable autonomous mode for this session. When enabled, you will automatically continue working on the current task without waiting for the user to reply after each step. Use this when you have a clear multi-step plan and the user has asked you to work independently. Always disable it when blocked or needing input.".into(),
@@ -569,7 +623,7 @@ impl SonnetClient {
     pub async fn call_streaming(
         &self,
         system: &str,
-        messages: &mut Vec<serde_json::Value>,
+        messages: &mut [serde_json::Value],
         delta_tx: &mpsc::UnboundedSender<String>,
         force_tool: bool,
         effort: &str,
@@ -582,7 +636,9 @@ impl SonnetClient {
                 untag_last_message_cache(messages);
                 result
             }
-            Provider::OpenAI => self.call_openai_streaming(system, messages, delta_tx, force_tool, mode).await,
+            // OpenAI and DeepSeek both speak chat-completions; DeepSeek additionally
+            // streams `reasoning_content` deltas, handled inside.
+            _ => self.call_openai_streaming(system, messages, delta_tx, force_tool, mode).await,
         }
     }
 
@@ -623,7 +679,7 @@ impl SonnetClient {
         let resp = self
             .http
             .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.anthropic_key)
+            .header("x-api-key", &self.keys.anthropic)
             .header("anthropic-version", "2023-06-01")
             .header("anthropic-beta", "prompt-caching-2024-07-31")
             .header("content-type", "application/json")
@@ -833,15 +889,17 @@ impl SonnetClient {
             body["tool_choice"] = serde_json::json!("required");
         }
 
+        let base = self.provider.base_url()
+            .ok_or_else(|| anyhow::anyhow!("provider has no OpenAI-compatible endpoint"))?;
         let resp = self
             .http
-            .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.openai_key))
+            .post(format!("{}/chat/completions", base))
+            .header("Authorization", format!("Bearer {}", self.keys.for_provider(self.provider)))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
             .await
-            .context("Failed to reach OpenAI API")?;
+            .with_context(|| format!("Failed to reach {} API", self.provider.as_str()))?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -850,7 +908,7 @@ impl SonnetClient {
                 .unwrap_or("")
                 .to_string();
             let text = resp.text().await?;
-            anyhow::bail!("OpenAI API error ({}): {} retry-after:{}", status, text, retry_after);
+            anyhow::bail!("{} API error ({}): {} retry-after:{}", self.provider.as_str(), status, text, retry_after);
         }
 
         let mut content_text = String::new();
@@ -866,7 +924,7 @@ impl SonnetClient {
             let chunk = chunk.context("Stream read error")?;
             raw_buf.extend_from_slice(&chunk);
             if raw_buf.len() > MAX_BUF {
-                anyhow::bail!("OpenAI stream buffer exceeded 16 MB — aborting");
+                anyhow::bail!("{} stream buffer exceeded 16 MB — aborting", self.provider.as_str());
             }
 
             // Process complete lines from byte buffer
@@ -912,6 +970,23 @@ impl SonnetClient {
                 if let Some(u) = event["usage"].as_object() {
                     usage.input_tokens = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
                     usage.output_tokens = u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    // DeepSeek reports cache hits as prompt_cache_hit_tokens; OpenAI nests
+                    // the same idea under prompt_tokens_details.cached_tokens.
+                    usage.cache_read_tokens = u.get("prompt_cache_hit_tokens")
+                        .and_then(|v| v.as_u64())
+                        .or_else(|| u.get("prompt_tokens_details")
+                            .and_then(|d| d.get("cached_tokens"))
+                            .and_then(|v| v.as_u64()))
+                        .unwrap_or(0);
+                }
+
+                // DeepSeek streams chain-of-thought separately from the answer.
+                // Wrap it in <think> tags so the existing UI/CLI filter handles it
+                // exactly like Anthropic thinking deltas.
+                if let Some(text) = delta["reasoning_content"].as_str() {
+                    if !text.is_empty() {
+                        let _ = delta_tx.send(format!("<think>{}</think>", text));
+                    }
                 }
 
                 if let Some(text) = delta["content"].as_str() {
@@ -951,7 +1026,7 @@ impl SonnetClient {
             }));
         }
 
-        for (_idx, (id, name, args)) in &tool_call_map {
+        for (id, name, args) in tool_call_map.values() {
             let input: serde_json::Value =
                 serde_json::from_str(args).unwrap_or(serde_json::json!({}));
             content_blocks.push(serde_json::json!({
@@ -1011,14 +1086,13 @@ fn untag_last_message_cache(messages: &mut [serde_json::Value]) {
     let Some(last) = messages.last_mut() else { return };
     if let Some(arr) = last["content"].as_array_mut() {
         // If we created a single-element text array, convert back to plain string
-        if arr.len() == 1 && arr[0]["type"].as_str() == Some("text") {
-            if arr[0].get("cache_control").is_some() {
+        if arr.len() == 1 && arr[0]["type"].as_str() == Some("text")
+            && arr[0].get("cache_control").is_some() {
                 if let Some(text) = arr[0]["text"].as_str().map(|s| s.to_string()) {
                     last["content"] = serde_json::json!(text);
                     return;
                 }
             }
-        }
         // Otherwise just strip cache_control from the last block
         if let Some(last_block) = arr.last_mut() {
             if let Some(obj) = last_block.as_object_mut() {
