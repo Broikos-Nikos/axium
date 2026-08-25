@@ -1,0 +1,43 @@
+{
+  "api_keys": {
+    "anthropic": "",
+    "openai": "",
+    "deepseek": "sk-..."
+  },
+  "models": {
+    "primary": "deepseek-v4-pro",
+    "primary_provider": "deepseek",
+    "continuation": "deepseek-v4-flash",
+    "continuation_provider": "deepseek",
+    "classifier": "deepseek-v4-flash",
+    "classifier_provider": "deepseek",
+    "compactor": "deepseek-v4-flash",
+    "compactor_provider": "deepseek",
+    "review": "deepseek-v4-flash",
+    "review_provider": "deepseek",
+    "fallback": "",
+    "fallback_provider": ""
+  },
+  "agent": {
+    "name": "Axium",
+    "soul": ""
+  },
+  "settings": {
+    "token_limit": 80000,
+    "max_tokens": 8192,
+    "max_tool_iterations": 30,
+    "terminal_timeout_secs": 120,
+    "working_directory": ".",
+    "memory_file": "data/memory.md",
+    "thinking_effort": "max",
+    "mode": "supercharge",
+    "cheap_effort": "low",
+    "facts_enabled": true,
+    "facts_file": "facts.db",
+    "brain_enabled": true,
+    "planner_enabled": true,
+    "checkpoints_enabled": true,
+    "distill_skills": false,
+    "skills_dir": ""
+  }
+}
