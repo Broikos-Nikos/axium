@@ -1,0 +1,13 @@
+[package]
+name = "axium-bench-rust"
+version = "1.0.0"
+edition = "2021"
+description = "Benchmarks for the Rust implementation of Axium"
+
+[[bin]]
+name = "bench-rust"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+chrono = "0.4"

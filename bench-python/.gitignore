@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+# Benchmark logs are results, not source. They are per-machine and per-run, and
+# committing them makes every diff a merge conflict.
+bench/logs/*.jsonl
+versus/logs/*.jsonl
+config.json

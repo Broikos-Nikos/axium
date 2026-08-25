@@ -1,0 +1,11 @@
+# Present so the project is installable and tooling can find its root. The
+# harness itself needs no build step: run it with `python -m bench.runner`.
+[project]
+name = "axium-bench-python"
+version = "1.0.0"
+description = "Benchmarks for the Python implementation of Axium"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.31"]
+
+[tool.setuptools]
+packages = ["bench", "versus"]

@@ -1,0 +1,3 @@
+target/
+# Results, not source: per-machine, per-run.
+logs/*.jsonl
