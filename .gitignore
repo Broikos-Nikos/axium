@@ -31,3 +31,36 @@ axiom
 
 # Catch-all for log files
 *.log
+
+# Python implementation
+__pycache__/
+*.pyc
+python/config.json
+python/data/
+
+# Durable-context runtime state. Per-machine and per-session; the fact store in
+# particular can hold whatever a conversation happened to mention.
+facts.db
+facts.db-shm
+facts.db-wal
+trajectories/
+.axium/checkpoints/
+
+# Benchmark results are results, not source: per-machine, per-run, and every
+# diff would be a merge conflict. The seed fixtures and scenario definitions ARE
+# source and are deliberately not ignored.
+bench-python/bench/logs/*.jsonl
+bench-python/versus/logs/
+# Not ignored: bench-python/baseline/ — the fixed point later runs are
+# compared against, which makes it source rather than a result.
+bench-rust/logs/*.jsonl
+bench-rust/target/
+bench-python/config.json
+
+# Benchmark artefacts
+# Proxy transcripts: 183M, and they hold verbatim request bodies. Never commit.
+bench-python/runs/
+bench-rust/target/
+__pycache__/
+*.pyc
+.pytest_cache/

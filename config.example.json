@@ -1,7 +1,8 @@
 {
   "api_keys": {
     "anthropic": "sk-ant-...",
-    "openai": "sk-proj-..."
+    "openai": "sk-proj-...",
+    "deepseek": "sk-..."
   },
   "models": {
     "primary": "claude-sonnet-4-6",
@@ -30,6 +31,10 @@
       "gpt-4.1-nano",
       "gpt-4o",
       "gpt-4o-mini"
+    ],
+    "deepseek": [
+      "deepseek-v4-pro",
+      "deepseek-v4-flash"
     ]
   },
   "agent": {
@@ -59,6 +64,13 @@
     "telegram_enabled": false,
     "conversation_logging": false,
     "compaction_threshold": 60,
-    "thinking_effort": "high"
+    "thinking_effort": "high",
+    "facts_enabled": true,
+    "facts_file": "facts.db",
+    "brain_enabled": true,
+    "planner_enabled": true,
+    "checkpoints_enabled": true,
+    "distill_skills": false,
+    "skills_dir": ""
   }
 }

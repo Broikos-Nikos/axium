@@ -244,22 +244,172 @@ Axium costs slightly more than CC+Haiku on medium tasks (~$0.02) because it uses
 
 ---
 
-## 6 model slots, 2 providers
+## 6 model slots, 3 providers
 
 ```json
 {
   "models": {
-    "primary":      "claude-sonnet-4-6",   // complex reasoning — used selectively
-    "continuation": "claude-haiku-4-5",    // tool-loop follow-ups — cheaper
-    "classifier":   "gpt-4.1-nano",        // routing decisions — very cheap
-    "compactor":    "gpt-4.1-mini",        // history summarization
-    "review":       "gpt-4.1-mini",        // post-turn code review
-    "fallback":     "gpt-4.1"             // auto-activates if primary fails
+    "primary":      "deepseek-v4-pro",     // complex reasoning — used selectively
+    "continuation": "deepseek-v4-flash",   // tool-loop follow-ups — cheaper
+    "classifier":   "deepseek-v4-flash",   // routing decisions — very cheap
+    "compactor":    "deepseek-v4-flash",   // history summarization
+    "review":       "deepseek-v4-flash",   // post-turn code review
+    "fallback":     "gpt-4.1"              // auto-activates if primary fails
   }
 }
 ```
 
-Each slot can point to Anthropic or OpenAI independently. The fallback activates automatically on repeated API failures or rate limits — no manual intervention.
+Each slot points to **Anthropic, OpenAI or DeepSeek** independently. The provider is inferred from the model id (`claude-*`, `deepseek-*`) or set explicitly per slot. DeepSeek speaks the OpenAI wire format, streams its reasoning separately, and reports prompt-cache hits — all of which Axium uses. The fallback activates automatically on repeated API failures or rate limits.
+
+```json
+"api_keys": { "anthropic": "...", "openai": "...", "deepseek": "..." }
+```
+
+Environment fallbacks: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`.
+
+---
+
+## Benchmarks
+
+`python/` holds a Python implementation of the same agent. Each implementation is measured by its own benchmark project, running the same scenarios through the same graders and writing the same JSONL rows, so a Rust number and a Python number are directly comparable:
+
+| project | measures |
+|---|---|
+| `bench-python/` | the Python implementation |
+| `bench-rust/` | the Rust implementation (this binary) |
+
+A 20-scenario suite covers bug fixes, refactors, features, read-only codebase comprehension, and agent-level behaviour. Every scenario runs against a freshly generated seed project with planted defects and is scored on two axes — **change** (did it do the task, verified by executing the agent's code) and **regress** (did it break anything that already worked). A run that ships the feature and breaks the build ranks below one that does nothing.
+
+```bash
+cd bench-python
+python -m bench.runner --sanity          # graders must fail on the untouched seed
+python -m bench.runner                   # full suite
+python -m bench.runner --compare deepseek-v4-pro,deepseek-v4-flash
+python -m bench.report --all
+```
+
+Every run records tokens, cache-hit rate, per-role cost split, latency and tool histogram, so a routing or prompt change can be proven to pay for itself. See `BENCHMARKS.md` for the full guide, or each project's own README.
+
+---
+
+## Head-to-head: Axium vs Hermes vs OpenClaw
+
+Nine scenarios across three axes, three difficulty tiers each, all three
+harnesses driving the **same model** (`deepseek-v4-flash`) with the same prompt
+text. Prompts are agent-neutral: no tool names, no framework vocabulary, nothing
+written for one harness.
+
+Tokens are not self-reported. Every call from every harness was routed through a
+recording proxy and counted from the provider's own `usage` block, then
+reconciled against each harness's own figure. Three of the three agreed exactly;
+one under-report was caught this way (see the footnotes).
+
+### The tests
+
+| id | tier | what it asks |
+|---|---|---|
+| **N1** | hard | 2,834 lines. A partial-refund tax leg reverses the full tax. The symptom names the ledger. |
+| **N2** | very hard | 7,630 lines across 37 modules. Same defect, but the symptom names only a behaviour: "numbers do not add up after a partial return". |
+| **N3** | crazy hard | As N2, plus a stale note naming an innocent, correct function as the recent change. Rewriting it is checked and fails the scenario. |
+| **M1** | hard | A constraint given in turn 1 must still govern turn 6, after four turns of unrelated work. |
+| **M2** | very hard | Twelve turns, two constraints, one of them revised mid-run. Retention alone gives the superseded value. |
+| **M3** | crazy hard | As M2, plus a checked-in document asserting the superseded value, so the harness must trust the conversation over the file. |
+| **R1** | hard | Delete two modules, then restore them byte-for-byte. |
+| **R2** | very hard | Delete two modules and edit three others, then restore only the deleted ones. The edits must survive. |
+| **R3** | crazy hard | An unrelated change lands between the damage and the repair, and must survive the restore. |
+
+### The results
+
+Checks passed, and tokens spent getting there. Lower is better on tokens.
+
+| | Axium | Hermes | OpenClaw |
+|---|---|---|---|
+| **N1** navigation, hard | **4/4** — 69,650 | 4/4 — 469,642 | 4/4 — 234,110 |
+| **N2** navigation, very hard | **4/4** — 78,801 | 4/4 — 1,789,262 *(DNF: 6.1x)* | 4/4 — 372,819 |
+| **N3** navigation, crazy hard | **5/5** — 102,536 | 5/5 — 592,613 | 5/5 — 367,497 |
+| **M1** memory, hard | 3/4 — 97,932 | **4/4** — 949,480 | **1/4** — 77,868 ¹ |
+| **M2** memory, very hard | **5/5** — 370,386 | **4/5 — applied the superseded value** — 1,899,137 | 5/5 — 1,036,446 |
+| **M3** memory, crazy hard | 5/6 — 365,138 | 5/6 — 1,633,682 | 5/6 — 1,162,038 |
+| **R1** restore, hard | **3/3** — 187,389 | 3/3 — 529,703 | **1/3 — never restored them** — 406,010 |
+| **R2** restore, very hard | **4/4** — 244,578 | 4/4 — 509,430 | **3/4 — not byte-identical** — 736,504 |
+| **R3** restore, crazy hard | **4/4** — 215,207 | 4/4 — 613,531 | **2/4 — lost them again** — 669,994 |
+| **fully passed** | **8 of 9** | 7 of 9 | 4 of 9 |
+| **total tokens** | **1,731,617** | 8,986,480 | 5,063,286 ¹ |
+| **vs Axium, like-for-like** ² | 1x | **4.2x** | **2.3x** |
+| **vs Axium, current binary** | 1x | 5.2x | 2.9x |
+
+*DNF* follows the published rule: a solve costing more than 5x the field's
+fastest solve of that scenario is recorded as not having finished. The bar is
+set against the fastest harness, not against Axium, and applies to Axium the
+same way.
+
+### What the numbers say
+
+**OpenClaw cannot reliably restore a tree it has damaged.** It solved none of the
+three restore scenarios: on R1 it never brought the deleted modules back, on R2
+it brought them back but not byte-identical, on R3 it lost them again. This is a
+capability difference, not a cost difference.
+
+**Hermes forgets a revised constraint.** On M2, told 200 and corrected to 250
+twelve turns later, it applied 200 — after 1,899,137 tokens and 23 minutes,
+against Axium's 370,386 and 3 minutes.
+
+**Axium is the cheapest harness at every navigation tier**, and its crazy-hard
+run cost less than its very-hard one: the misleading note did not cost it
+attempts.
+
+**Neither competitor noticed the contradiction it left behind.** On M3 both
+applied the correct values and left a checked-in document asserting the old one,
+without mentioning it. Finished, but did not reach the goal.
+
+### What these numbers do NOT show
+
+Stated because a benchmark that only publishes its wins is marketing:
+
+* **One run per cell.** Axium's own R1 varied 1.5x between two runs of an
+  identical scenario (223,599 and 150,981 tokens). Treat every multiple as a
+  direction, not a precise figure.
+* **M1 is a genuine Axium failure.** It recalls the number and what it is for,
+  then does not write it into the settings module. 3/4, reproducibly.
+* **The crazy-hard navigation trap caught nobody.** All three passed N3's
+  invariant check. That is evidence about the benchmark, not about the field.
+* **Two Axium binaries are involved.** A path-guard defect was blocking every
+  file write on Windows, and Axium was routing around it through the shell at
+  real token cost. The competitors were measured against the *older* binary; the
+  Axium column above is the fixed one. Both multiples are given in the table for
+  that reason, and the like-for-like figure is the one to quote. The fix bought
+  1.24x overall, and 2.5x on the navigation column specifically (631,691 to
+  250,987) where the blocked writes cost the most retries. On the restore column
+  it bought nothing measurable.
+* **One model tier.** All of the above is `deepseek-v4-flash`. The single
+  `deepseek-v4-pro` data point (R1) put Axium at 249,501 against Hermes at
+  723,484 — same direction, different scale.
+
+¹ OpenClaw's total includes the 77,868 tokens the wire recorded for M1, which
+OpenClaw itself reported as zero.
+
+² Like-for-like compares the competitors against the Axium binary they actually
+ran alongside. It is the conservative figure and the one to quote.
+
+OpenClaw reported **zero** tokens for M1. The wire recorded 77,868. Unmeasured
+is not zero, which is why nothing here is taken from a harness's own accounting
+without reconciling it first.
+
+### Reproducing it
+
+```bash
+cd bench-python
+python sanity_matrix.py                       # every grader must catch the plausible wrong answer
+python proxy.py --port 8901 --run matrix/axium --label axium      # one per harness
+python xrunner.py --suite matrix --model deepseek-v4-flash
+python reconcile.py                           # self-reported vs the wire
+```
+
+`sanity_matrix.py` is the gate that matters. For each scenario it applies the
+*plausible wrong move* — believed the stale note and rewrote the innocent
+function, missed the mid-run revision, rolled the whole tree back instead of
+only the deleted files — and requires the grader to catch it. A grader that is
+merely red on an untouched tree proves very little.
 
 ---
 
@@ -415,7 +565,10 @@ axium/
 ├── axium-skills/            # domain skill folders (Skills mode)
 ├── axium-plugins/           # lifecycle hook plugins
 ├── soul.md                  # system prompt (hot-reloadable)
-└── memory.md                # agent memory (gitignored)
+├── memory.md                # agent memory (gitignored)
+└── python/                  # Python implementation + benchmark harness
+    ├── axium/               # same pipeline: classify → tool loop → review
+    └── bench/               # 20 scenarios, seeded fixtures, objective graders
 ```
 
 ---
