@@ -107,15 +107,15 @@ Where they stop is where Axium starts.
 | **Behavioral user model**, infers preferences without prompting | ✅ | ❌ |
 | **Cross-session full-text history search** (SQLite FTS5) | ✅ | ❌ |
 | **Background task queue, runs while you're offline** | ✅ Telegram notification on done | ❌ |
-| **Non-coding tasks**, research, email, system ops, monitoring | ✅ | ⚠ coding-focused |
-| **Multi-model routing**, 6 slots, 2 providers, per-slot config | ✅ | ❌ single model |
+| **Non-coding tasks**: research, email, system ops, monitoring | ✅ | ⚠ coding-focused |
+| **Multi-model routing**: 6 slots, 2 providers, per-slot config | ✅ | ❌ single model |
 | **Auto-fallback** on rate limit or outage | ✅ | ❌ |
 | Continuation model for tool-loop turns (cheaper) | ✅ | ❌ |
 | Tool subsetting, simple mode sends 18/31 tools to API | ✅ saves ~4,300 tokens/call | ❌ |
 | Application-level prompt caching (1h TTL, 3 breakpoints) | ✅ | ❌ |
 | Local classifier, conversational turns skip LLM entirely | ✅ ~<1ms, zero cost | ❌ |
 | Post-turn code review by a dedicated secondary model | ✅ automatic | ❌ |
-| Plugin system, 8 lifecycle hooks, language-agnostic | ✅ | ❌ |
+| Plugin system: 8 lifecycle hooks, language-agnostic | ✅ | ❌ |
 | Injectable domain skills per task type | ✅ `axium-skills/` | ❌ |
 | Telegram channel with full agent access | ✅ | ❌ |
 | **CLI / SSH access**, full agent over stdin/stdout, no browser needed | ✅ | ❌ |
@@ -130,7 +130,7 @@ The last row is intentional: Axium has no IDE plugin. If deep VS Code / JetBrain
 
 The leading tools offer project-scoped memory files, you write conventions, the agent reads them per-project. That's useful. Axium goes further:
 
-- **User memory** (`memory.md`) (facts, preferences, recurring context. Survives restarts, survives new projects. Plain markdown) you can read and edit it directly.
+- **User memory** (`memory.md`): facts, preferences, recurring context. Survives restarts, survives new projects. Plain markdown, you can read and edit it directly.
 - **User model**: inferred behavioral profile written proactively by the agent after sessions: communication style, expertise level, recurring patterns. No prompting required.
 - **Project knowledge** (`.axium/knowledge.md`), per-project notes and conventions, written and updated by the agent as it learns your stack.
 - **Conversation history**: all sessions stored in SQLite with FTS5 full-text search. Ask *"what did we decide about the auth architecture last month?"* and surface real past context, not a guess.
@@ -220,7 +220,7 @@ Using published Anthropic pricing (claude-sonnet-4-6 and claude-haiku-4-5). Clau
 | Claude Code `--model haiku` | Haiku, all calls | ~$0.016 |
 | **Axium** | **Auto-routes → Haiku all calls · 18-tool subset** | **~$0.012** |
 
-**Scenario B (medium project:** *"refactor auth module to JWT, run tests, fix failures, commit"*) 10 API calls, context grows to ~30k tokens.
+**Scenario B, medium project:** *"refactor auth module to JWT, run tests, fix failures, commit"*, 10 API calls, context grows to ~30k tokens.
 
 | | Model routing | Approx cost |
 |---|---|---|
@@ -237,7 +237,7 @@ Axium costs slightly more than CC+Haiku on medium tasks (~$0.02) because it uses
 | Local classifier, trivial / conversational turns | $0, no API call at all |
 | Prompt caching (1h TTL, 3 breakpoints) | ~90% reduction on repeated prefix tokens within a session |
 | Tool subsetting, 18 tools for simple, 31 for complex | −4,300 tokens per simple call |
-| Continuation model, Haiku for all tool-loop follow-ups | −70% per follow-up vs Sonnet |
+| Continuation model: Haiku for all tool-loop follow-ups | −70% per follow-up vs Sonnet |
 | Compaction at 60% token limit | −15-25% on long multi-tool sessions |
 
 > Claude Code subscription tiers ($20-200/month) bundle usage rather than billing per token, the ratios above reflect underlying API costs and are consistent regardless of billing model.
@@ -324,15 +324,15 @@ Checks passed, and tokens spent getting there. Lower is better on tokens.
 
 | | Axium | Hermes | OpenClaw |
 |---|---|---|---|
-| **N1** navigation, hard | **4/4**, 69,650 | 4/4-469,642 | 4/4-234,110 |
-| **N2** navigation, very hard | **4/4**, 78,801 | 4/4-1,789,262 *(DNF: 6.1x)* | 4/4-372,819 |
-| **N3** navigation, crazy hard | **5/5**, 102,536 | 5/5-592,613 | 5/5-367,497 |
-| **M1** memory, hard | 3/4-97,932 | **4/4** (949,480 | **1/4**) 77,868 ¹ |
-| **M2** memory, very hard | **5/5** (370,386 | **4/5) applied the superseded value**, 1,899,137 | 5/5-1,036,446 |
-| **M3** memory, crazy hard | 5/6-365,138 | 5/6-1,633,682 | 5/6-1,162,038 |
-| **R1** restore, hard | **3/3** (187,389 | 3/3-529,703 | **1/3) never restored them**, 406,010 |
-| **R2** restore, very hard | **4/4** (244,578 | 4/4-509,430 | **3/4) not byte-identical**, 736,504 |
-| **R3** restore, crazy hard | **4/4** (215,207 | 4/4-613,531 | **2/4) lost them again**, 669,994 |
+| **N1** navigation, hard | **4/4**, 69,650 | 4/4, 469,642 | 4/4, 234,110 |
+| **N2** navigation, very hard | **4/4**, 78,801 | 4/4, 1,789,262 *(DNF: 6.1x)* | 4/4, 372,819 |
+| **N3** navigation, crazy hard | **5/5**, 102,536 | 5/5, 592,613 | 5/5, 367,497 |
+| **M1** memory, hard | 3/4, 97,932 | **4/4**, 949,480 | **1/4**, 77,868 ¹ |
+| **M2** memory, very hard | **5/5**, 370,386 | **4/5**, 1,899,137 *(applied the superseded value)* | 5/5, 1,036,446 |
+| **M3** memory, crazy hard | 5/6, 365,138 | 5/6, 1,633,682 | 5/6, 1,162,038 |
+| **R1** restore, hard | **3/3**, 187,389 | 3/3, 529,703 | **1/3**, 406,010 *(never restored them)* |
+| **R2** restore, very hard | **4/4**, 244,578 | 4/4, 509,430 | **3/4**, 736,504 *(not byte-identical)* |
+| **R3** restore, crazy hard | **4/4**, 215,207 | 4/4, 613,531 | **2/4**, 669,994 *(lost them again)* |
 | **fully passed** | **8 of 9** | 7 of 9 | 4 of 9 |
 | **total tokens** | **1,731,617** | 8,986,480 | 5,063,286 ¹ |
 | **vs Axium, like-for-like** ² | 1x | **4.2x** | **2.3x** |

@@ -25,7 +25,7 @@ scenario and applied identically to all three harnesses. A right answer that
 costs more than the budget scores as a failure, because on a real task it would
 have run out of context.
 
-Turn text is agent-neutral (no tool names, no framework vocabulary) so the
+Turn text is agent-neutral (no tool names, no framework vocabulary), so the
 same words can go to Axium, Hermes and OpenClaw without favouring any of them.
 """
 import os

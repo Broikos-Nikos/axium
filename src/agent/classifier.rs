@@ -306,7 +306,7 @@ Respond with ONLY the classification line. No explanations."#;
         let system = r#"You are a task-completion auditor. Given a user request, the tools the agent executed, and the agent's final text, decide if the task is DONE.
 
 Rules:
-- If the user's message is conversational (a greeting, check-in, acknowledgment, or social message (e.g. "hi", "ok", "thanks", "just checking", "hello", "good morning")) and the agent replied appropriately → COMPLETE
+- If the user's message is conversational, a greeting, check-in, acknowledgment, or social message (e.g. "hi", "ok", "thanks", "just checking", "hello", "good morning"), and the agent replied appropriately → COMPLETE
 - If the user asked a question and the agent answered it → COMPLETE
 - If the user asked for something to be created/written/built AND the tool log shows it was done → COMPLETE
 - If the agent delivered a file/email the user asked for → COMPLETE

@@ -554,7 +554,7 @@ schema, otherwise the two numbers cannot be compared.
 
       **M2 and M3 are weaker than they look, and the honest reading matters.**
       In both, the ablation flipped only the check that tests the mechanism's
-      *presence* ("used undo_turn", "the Brain exists") not one that tests its
+      *presence* ("used undo_turn", "the Brain exists"), not one that tests its
       *benefit*. With checkpoints off the agent still reconstructed the files
       byte-exactly that run; with the Brain off it still answered without
       re-exploring. So these two ablations demonstrate the flag works, not that
@@ -689,7 +689,7 @@ Verified facts from that research, re-confirmed live on 2026-08-25:
 | language | TypeScript | Python | Rust + Python |
 | stars | 387,521 | 236,069 |, |
 | licence | MIT (LICENSE file; GitHub's API wrongly says NOASSERTION) | MIT |, |
-| last push | 2026-08-25 | 2026-08-25 |, |
+| last push | 2026-08-25 | 2026-08-25 | - |
 
 The architectural finding worth keeping: **all four harnesses share a
 persona-file convention.** Hermes ships `hermes claw migrate`, which reads
