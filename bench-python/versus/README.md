@@ -1,7 +1,7 @@
 # Axium vs Orange
 
 `bench/` measures Axium against a different model. `versus/` measures Axium against
-a different **agent**: Orange, the PC assistant in `C:\xampp\htdocs\orange`.
+a different **agent**: Orange, the PC assistant in `C:\xampp\htdocs\playground\orange`.
 
 Both agents are driven through the same five multi-turn sessions, on byte-identical
 fresh copies of the same seed project, and graded by code neither of them can see.
@@ -81,7 +81,7 @@ written through `settings.set`, which would rewrite the user's real
 --model / --continuation    Axium's primary / cheap model ('' disables routing)
 --mode simple               Axium's 12-tool minimal set
 --orange-chat / --orange-coder   Orange's chat and coder models
---orange-root PATH          if Orange is not at C:\xampp\htdocs\orange
+--orange-root PATH          if Orange is not at C:\xampp\htdocs\playground\orange
 --max-turns N               plumbing smoke test; scores from such a run are not
                             comparable and are never written to the logs
 ```

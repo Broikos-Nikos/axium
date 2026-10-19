@@ -28,7 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 import axium_path  # noqa: E402  (resolves where the agent package lives)
 PY_ROOT = axium_path.AXIUM_ROOT                       # axium/python
-ORANGE_ROOT_DEFAULT = r"C:\xampp\htdocs\orange"
+ORANGE_ROOT_DEFAULT = r"C:\xampp\htdocs\playground\orange"
 
 
 class TurnResult:
